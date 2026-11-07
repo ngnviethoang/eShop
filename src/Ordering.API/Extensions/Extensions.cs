@@ -1,4 +1,4 @@
-﻿using FluentValidation;
+using FluentValidation;
 
 internal static class Extensions
 {
@@ -17,8 +17,6 @@ internal static class Extensions
             options.UseNpgsql(builder.Configuration.GetConnectionString("orderingdb"));
         });
         builder.EnrichNpgsqlDbContext<OrderingContext>();
-
-        services.AddMigration<OrderingContext, OrderingContextSeed>();
 
         // Add the integration services that consume the DbContext
         services.AddTransient<IIntegrationEventLogService, IntegrationEventLogService<OrderingContext>>();

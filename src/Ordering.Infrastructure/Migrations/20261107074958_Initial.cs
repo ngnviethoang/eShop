@@ -21,6 +21,7 @@ namespace Ordering.Infrastructure.Migrations
 
             migrationBuilder.CreateSequence(
                 name: "orderitemseq",
+                schema: "ordering",
                 incrementBy: 10);
 
             migrationBuilder.CreateSequence(
@@ -52,7 +53,7 @@ namespace Ordering.Infrastructure.Migrations
                 schema: "ordering",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "integer", nullable: false, defaultValue: 1),
+                    Id = table.Column<int>(type: "integer", nullable: false),
                     Name = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false)
                 },
                 constraints: table =>
@@ -61,16 +62,21 @@ namespace Ordering.Infrastructure.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "orderstatus",
+                name: "IntegrationEventLog",
                 schema: "ordering",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "integer", nullable: false, defaultValue: 1),
-                    Name = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false)
+                    EventId = table.Column<Guid>(type: "uuid", nullable: false),
+                    EventTypeName = table.Column<string>(type: "text", nullable: false),
+                    State = table.Column<int>(type: "integer", nullable: false),
+                    TimesSent = table.Column<int>(type: "integer", nullable: false),
+                    CreationTime = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    Content = table.Column<string>(type: "text", nullable: false),
+                    TransactionId = table.Column<Guid>(type: "uuid", nullable: false)
                 },
                 constraints: table =>
                 {
-                    table.PrimaryKey("PK_orderstatus", x => x.Id);
+                    table.PrimaryKey("PK_IntegrationEventLog", x => x.EventId);
                 });
 
             migrationBuilder.CreateTable(
@@ -125,15 +131,15 @@ namespace Ordering.Infrastructure.Migrations
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false),
+                    OrderDate = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     Address_Street = table.Column<string>(type: "text", nullable: true),
                     Address_City = table.Column<string>(type: "text", nullable: true),
                     Address_State = table.Column<string>(type: "text", nullable: true),
                     Address_Country = table.Column<string>(type: "text", nullable: true),
                     Address_ZipCode = table.Column<string>(type: "text", nullable: true),
-                    OrderStatusId = table.Column<int>(type: "integer", nullable: false),
-                    Description = table.Column<string>(type: "text", nullable: true),
                     BuyerId = table.Column<int>(type: "integer", nullable: true),
-                    OrderDate = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    OrderStatus = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
+                    Description = table.Column<string>(type: "text", nullable: true),
                     PaymentMethodId = table.Column<int>(type: "integer", nullable: true)
                 },
                 constraints: table =>
@@ -145,13 +151,6 @@ namespace Ordering.Infrastructure.Migrations
                         principalSchema: "ordering",
                         principalTable: "buyers",
                         principalColumn: "Id");
-                    table.ForeignKey(
-                        name: "FK_orders_orderstatus_OrderStatusId",
-                        column: x => x.OrderStatusId,
-                        principalSchema: "ordering",
-                        principalTable: "orderstatus",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
                     table.ForeignKey(
                         name: "FK_orders_paymentmethods_PaymentMethodId",
                         column: x => x.PaymentMethodId,
@@ -167,13 +166,13 @@ namespace Ordering.Infrastructure.Migrations
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false),
-                    ProductId = table.Column<int>(type: "integer", nullable: false),
-                    OrderId = table.Column<int>(type: "integer", nullable: false),
-                    Discount = table.Column<decimal>(type: "numeric", nullable: false),
-                    PictureUrl = table.Column<string>(type: "text", nullable: true),
                     ProductName = table.Column<string>(type: "text", nullable: false),
+                    PictureUrl = table.Column<string>(type: "text", nullable: true),
                     UnitPrice = table.Column<decimal>(type: "numeric", nullable: false),
-                    Units = table.Column<int>(type: "integer", nullable: false)
+                    Discount = table.Column<decimal>(type: "numeric", nullable: false),
+                    Units = table.Column<int>(type: "integer", nullable: false),
+                    ProductId = table.Column<int>(type: "integer", nullable: false),
+                    OrderId = table.Column<int>(type: "integer", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -207,12 +206,6 @@ namespace Ordering.Infrastructure.Migrations
                 column: "BuyerId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_orders_OrderStatusId",
-                schema: "ordering",
-                table: "orders",
-                column: "OrderStatusId");
-
-            migrationBuilder.CreateIndex(
                 name: "IX_orders_PaymentMethodId",
                 schema: "ordering",
                 table: "orders",
@@ -235,6 +228,10 @@ namespace Ordering.Infrastructure.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropTable(
+                name: "IntegrationEventLog",
+                schema: "ordering");
+
+            migrationBuilder.DropTable(
                 name: "orderItems",
                 schema: "ordering");
 
@@ -244,10 +241,6 @@ namespace Ordering.Infrastructure.Migrations
 
             migrationBuilder.DropTable(
                 name: "orders",
-                schema: "ordering");
-
-            migrationBuilder.DropTable(
-                name: "orderstatus",
                 schema: "ordering");
 
             migrationBuilder.DropTable(
@@ -267,7 +260,8 @@ namespace Ordering.Infrastructure.Migrations
                 schema: "ordering");
 
             migrationBuilder.DropSequence(
-                name: "orderitemseq");
+                name: "orderitemseq",
+                schema: "ordering");
 
             migrationBuilder.DropSequence(
                 name: "orderseq",

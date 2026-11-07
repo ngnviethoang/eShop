@@ -20,14 +20,24 @@ namespace Webhooks.API.Migrations
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
                     Type = table.Column<int>(type: "integer", nullable: false),
                     Date = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    DestUrl = table.Column<string>(type: "text", nullable: true),
+                    DestUrl = table.Column<string>(type: "text", nullable: false),
                     Token = table.Column<string>(type: "text", nullable: true),
-                    UserId = table.Column<string>(type: "text", nullable: true)
+                    UserId = table.Column<string>(type: "text", nullable: false)
                 },
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_Subscriptions", x => x.Id);
                 });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Subscriptions_Type",
+                table: "Subscriptions",
+                column: "Type");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Subscriptions_UserId",
+                table: "Subscriptions",
+                column: "UserId");
         }
 
         /// <inheritdoc />
