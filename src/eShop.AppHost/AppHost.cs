@@ -14,14 +14,20 @@ var postgres = builder.AddPostgres("postgres")
     .WithImageTag("latest")
     .WithLifetime(ContainerLifetime.Persistent);
 
-var catalogDb = postgres.AddDatabase("catalogdb");
-var identityDb = postgres.AddDatabase("identitydb");
-var orderDb = postgres.AddDatabase("orderingdb");
-var webhooksDb = postgres.AddDatabase("webhooksdb");
+var catalogDb = postgres.AddDatabase("CatalogDb");
+var identityDb = postgres.AddDatabase("IdentityDb");
+var orderDb = postgres.AddDatabase("OrderingDb");
+var webhooksDb = postgres.AddDatabase("WebhooksDb");
 
 var launchProfileName = ShouldUseHttpForEndpoints() ? "http" : "https";
 
 // Services
+builder.AddDotnetProject("db-migrator", "../DbMigrator")
+    .WithReference(catalogDb).WaitFor(catalogDb)
+    .WithReference(identityDb).WaitFor(identityDb)
+    .WithReference(orderDb).WaitFor(orderDb)
+    .WithReference(webhooksDb).WaitFor(webhooksDb);
+
 var identityApi = builder.AddDotnetProject("identity-api", "../Identity.API", o => o.LaunchProfileName = launchProfileName)
     .WithExternalHttpEndpoints()
     .WithReference(identityDb)
