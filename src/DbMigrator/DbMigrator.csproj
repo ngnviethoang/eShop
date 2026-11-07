@@ -23,18 +23,9 @@
       <PackageReference Include="Polly" />
       <PackageReference Include="Microsoft.Extensions.Hosting" />
       <PackageReference Include="Microsoft.Extensions.Configuration" />
-      <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
-      <PackageReference Include="Microsoft.Extensions.Configuration.CommandLine" />
     </ItemGroup>
 
     <ItemGroup>
       <EmbeddedResource Include="Scripts/**/*.sql" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <Folder Include="Scripts\CatalogDB\" />
-      <Folder Include="Scripts\IdentityDB\" />
-      <Folder Include="Scripts\OrderingDB\" />
-      <Folder Include="Scripts\WebhooksDB\" />
     </ItemGroup>
 </Project>
