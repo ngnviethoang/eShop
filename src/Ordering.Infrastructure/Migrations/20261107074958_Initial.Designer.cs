@@ -4,16 +4,16 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-using eShop.Ordering.Infrastructure;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+using eShop.Ordering.Infrastructure;
 
 #nullable disable
 
 namespace Ordering.Infrastructure.Migrations
 {
     [DbContext(typeof(OrderingContext))]
-    [Migration("20231026091055_Outbox")]
-    partial class Outbox
+    [Migration("20261107074958_Initial")]
+    partial class Initial
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -21,7 +21,7 @@ namespace Ordering.Infrastructure.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .HasDefaultSchema("ordering")
-                .HasAnnotation("ProductVersion", "8.0.0-rtm.23512.13")
+                .HasAnnotation("ProductVersion", "10.0.12")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -69,7 +69,7 @@ namespace Ordering.Infrastructure.Migrations
                     b.ToTable("IntegrationEventLog", "ordering");
                 });
 
-            modelBuilder.Entity(" eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.Buyer", b =>
+            modelBuilder.Entity("eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.Buyer", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -93,7 +93,7 @@ namespace Ordering.Infrastructure.Migrations
                     b.ToTable("buyers", "ordering");
                 });
 
-            modelBuilder.Entity(" eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.CardType", b =>
+            modelBuilder.Entity("eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.CardType", b =>
                 {
                     b.Property<int>("Id")
                         .HasColumnType("integer");
@@ -108,7 +108,7 @@ namespace Ordering.Infrastructure.Migrations
                     b.ToTable("cardtypes", "ordering");
                 });
 
-            modelBuilder.Entity(" eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.PaymentMethod", b =>
+            modelBuilder.Entity("eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.PaymentMethod", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -155,7 +155,7 @@ namespace Ordering.Infrastructure.Migrations
                     b.ToTable("paymentmethods", "ordering");
                 });
 
-            modelBuilder.Entity(" eShop.Ordering.Domain.AggregatesModel.OrderAggregate.Order", b =>
+            modelBuilder.Entity("eShop.Ordering.Domain.AggregatesModel.OrderAggregate.Order", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -163,37 +163,34 @@ namespace Ordering.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseHiLo(b.Property<int>("Id"), "orderseq");
 
+                    b.Property<int?>("BuyerId")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Description")
                         .HasColumnType("text");
 
-                    b.Property<int?>("_buyerId")
-                        .HasColumnType("integer")
-                        .HasColumnName("BuyerId");
+                    b.Property<DateTime>("OrderDate")
+                        .HasColumnType("timestamp with time zone");
 
-                    b.Property<DateTime>("_orderDate")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("OrderDate");
+                    b.Property<string>("OrderStatus")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
-                    b.Property<int>("_orderStatusId")
-                        .HasColumnType("integer")
-                        .HasColumnName("OrderStatusId");
-
-                    b.Property<int?>("_paymentMethodId")
+                    b.Property<int?>("PaymentId")
                         .HasColumnType("integer")
                         .HasColumnName("PaymentMethodId");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("_buyerId");
+                    b.HasIndex("BuyerId");
 
-                    b.HasIndex("_orderStatusId");
-
-                    b.HasIndex("_paymentMethodId");
+                    b.HasIndex("PaymentId");
 
                     b.ToTable("orders", "ordering");
                 });
 
-            modelBuilder.Entity(" eShop.Ordering.Domain.AggregatesModel.OrderAggregate.OrderItem", b =>
+            modelBuilder.Entity("eShop.Ordering.Domain.AggregatesModel.OrderAggregate.OrderItem", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -201,53 +198,33 @@ namespace Ordering.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseHiLo(b.Property<int>("Id"), "orderitemseq");
 
+                    b.Property<decimal>("Discount")
+                        .HasColumnType("numeric");
+
                     b.Property<int>("OrderId")
                         .HasColumnType("integer");
+
+                    b.Property<string>("PictureUrl")
+                        .HasColumnType("text");
 
                     b.Property<int>("ProductId")
                         .HasColumnType("integer");
 
-                    b.Property<decimal>("_discount")
-                        .HasColumnType("numeric")
-                        .HasColumnName("Discount");
-
-                    b.Property<string>("_pictureUrl")
-                        .HasColumnType("text")
-                        .HasColumnName("PictureUrl");
-
-                    b.Property<string>("_productName")
+                    b.Property<string>("ProductName")
                         .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("ProductName");
+                        .HasColumnType("text");
 
-                    b.Property<decimal>("_unitPrice")
-                        .HasColumnType("numeric")
-                        .HasColumnName("UnitPrice");
+                    b.Property<decimal>("UnitPrice")
+                        .HasColumnType("numeric");
 
-                    b.Property<int>("_units")
-                        .HasColumnType("integer")
-                        .HasColumnName("Units");
+                    b.Property<int>("Units")
+                        .HasColumnType("integer");
 
                     b.HasKey("Id");
 
                     b.HasIndex("OrderId");
 
                     b.ToTable("orderItems", "ordering");
-                });
-
-            modelBuilder.Entity(" eShop.Ordering.Domain.AggregatesModel.OrderAggregate.OrderStatus", b =>
-                {
-                    b.Property<int>("Id")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("orderstatus", "ordering");
                 });
 
             modelBuilder.Entity("eShop.Ordering.Infrastructure.Idempotency.ClientRequest", b =>
@@ -268,15 +245,15 @@ namespace Ordering.Infrastructure.Migrations
                     b.ToTable("requests", "ordering");
                 });
 
-            modelBuilder.Entity(" eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.PaymentMethod", b =>
+            modelBuilder.Entity("eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.PaymentMethod", b =>
                 {
-                    b.HasOne(" eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.Buyer", null)
+                    b.HasOne("eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.Buyer", null)
                         .WithMany("PaymentMethods")
                         .HasForeignKey("BuyerId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne(" eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.CardType", "CardType")
+                    b.HasOne("eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.CardType", "CardType")
                         .WithMany()
                         .HasForeignKey("_cardTypeId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -285,24 +262,18 @@ namespace Ordering.Infrastructure.Migrations
                     b.Navigation("CardType");
                 });
 
-            modelBuilder.Entity(" eShop.Ordering.Domain.AggregatesModel.OrderAggregate.Order", b =>
+            modelBuilder.Entity("eShop.Ordering.Domain.AggregatesModel.OrderAggregate.Order", b =>
                 {
-                    b.HasOne(" eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.Buyer", null)
+                    b.HasOne("eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.Buyer", "Buyer")
                         .WithMany()
-                        .HasForeignKey("_buyerId");
+                        .HasForeignKey("BuyerId");
 
-                    b.HasOne(" eShop.Ordering.Domain.AggregatesModel.OrderAggregate.OrderStatus", "OrderStatus")
+                    b.HasOne("eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.PaymentMethod", null)
                         .WithMany()
-                        .HasForeignKey("_orderStatusId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne(" eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.PaymentMethod", null)
-                        .WithMany()
-                        .HasForeignKey("_paymentMethodId")
+                        .HasForeignKey("PaymentId")
                         .OnDelete(DeleteBehavior.Restrict);
 
-                    b.OwnsOne(" eShop.Ordering.Domain.AggregatesModel.OrderAggregate.Address", "Address", b1 =>
+                    b.OwnsOne("eShop.Ordering.Domain.AggregatesModel.OrderAggregate.Address", "Address", b1 =>
                         {
                             b1.Property<int>("OrderId")
                                 .HasColumnType("integer");
@@ -333,24 +304,24 @@ namespace Ordering.Infrastructure.Migrations
                     b.Navigation("Address")
                         .IsRequired();
 
-                    b.Navigation("OrderStatus");
+                    b.Navigation("Buyer");
                 });
 
-            modelBuilder.Entity(" eShop.Ordering.Domain.AggregatesModel.OrderAggregate.OrderItem", b =>
+            modelBuilder.Entity("eShop.Ordering.Domain.AggregatesModel.OrderAggregate.OrderItem", b =>
                 {
-                    b.HasOne(" eShop.Ordering.Domain.AggregatesModel.OrderAggregate.Order", null)
+                    b.HasOne("eShop.Ordering.Domain.AggregatesModel.OrderAggregate.Order", null)
                         .WithMany("OrderItems")
                         .HasForeignKey("OrderId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
 
-            modelBuilder.Entity(" eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.Buyer", b =>
+            modelBuilder.Entity("eShop.Ordering.Domain.AggregatesModel.BuyerAggregate.Buyer", b =>
                 {
                     b.Navigation("PaymentMethods");
                 });
 
-            modelBuilder.Entity(" eShop.Ordering.Domain.AggregatesModel.OrderAggregate.Order", b =>
+            modelBuilder.Entity("eShop.Ordering.Domain.AggregatesModel.OrderAggregate.Order", b =>
                 {
                     b.Navigation("OrderItems");
                 });

@@ -12,7 +12,7 @@ using Webhooks.API.Infrastructure;
 namespace Webhooks.API.Migrations
 {
     [DbContext(typeof(WebhooksContext))]
-    [Migration("20230925222606_Initial")]
+    [Migration("20261107075049_Initial")]
     partial class Initial
     {
         /// <inheritdoc />
@@ -20,7 +20,7 @@ namespace Webhooks.API.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "8.0.0-rc.1.23419.6")
+                .HasAnnotation("ProductVersion", "10.0.12")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -37,6 +37,7 @@ namespace Webhooks.API.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("DestUrl")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("Token")
@@ -46,9 +47,14 @@ namespace Webhooks.API.Migrations
                         .HasColumnType("integer");
 
                     b.Property<string>("UserId")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("Type");
+
+                    b.HasIndex("UserId");
 
                     b.ToTable("Subscriptions");
                 });

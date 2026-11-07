@@ -59,9 +59,9 @@ var webHooksApi = builder.AddDotnetProject("webhooks-api", "../Webhooks.API")
     .WithEnvironment("Identity__Url", identityEndpoint);
 
 // Reverse proxies
-builder.AddYarp("mobile-bff")
+/*builder.AddYarp("mobile-bff")
     .WithExternalHttpEndpoints()
-    .ConfigureMobileBffRoutes(catalogApi, orderingApi, identityApi);
+    .ConfigureMobileBffRoutes(catalogApi, orderingApi, identityApi);*/
 
 // Apps
 var webhooksClient = builder.AddDotnetProject("webhooksclient", "../WebhookClient", o => o.LaunchProfileName = launchProfileName)

@@ -1,4 +1,4 @@
-﻿using eShop.Catalog.API.Services;
+using eShop.Catalog.API.Services;
 
 public static class Extensions
 {
@@ -19,9 +19,6 @@ public static class Extensions
                 builder.UseVector();
             });
         });
-
-        // REVIEW: This is done for development ease but shouldn't be here in production
-        builder.Services.AddMigration<CatalogContext, CatalogContextSeed>();
 
         // Add the integration services that consume the DbContext
         builder.Services.AddTransient<IIntegrationEventLogService, IntegrationEventLogService<CatalogContext>>();
