@@ -7,7 +7,10 @@ internal static class Extensions
         builder.AddRabbitMqEventBus("eventbus")
                .AddEventBusSubscriptions();
 
-        builder.AddNpgsqlDbContext<WebhooksContext>("webhooksdb");
+        builder.AddNpgsqlDbContext<WebhooksContext>("webhooksdb", configureDbContextOptions: options =>
+        {
+            options.UseNpgsql(npgsql => npgsql.MigrationsAssembly("DbMigrator"));
+        });
 
 
         builder.Services.AddTransient<IGrantUrlTesterService, GrantUrlTesterService>();

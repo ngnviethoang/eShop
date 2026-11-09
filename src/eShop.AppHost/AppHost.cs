@@ -1,4 +1,4 @@
-﻿using System.IO.Pipes;
+using System.IO.Pipes;
 using eShop.AppHost;
 
 var builder = DistributedApplication.CreateBuilder(args);
@@ -9,7 +9,8 @@ builder.AddAzureContainerAppEnvironment("aca");
 var redis = builder.AddRedis("redis");
 var rabbitMq = builder.AddRabbitMQ("eventbus")
     .WithLifetime(ContainerLifetime.Persistent);
-var postgres = builder.AddPostgres("postgres")
+var pgPassword = builder.AddParameter("postgres-password", "yourWeak(!)Password", secret: true);
+var postgres = builder.AddPostgres("postgres", password: pgPassword)
     .WithImage("ankane/pgvector")
     .WithImageTag("latest")
     .WithLifetime(ContainerLifetime.Persistent);

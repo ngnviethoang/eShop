@@ -9,27 +9,35 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <Content Include="..\..\.dockerignore">
-        <Link>.dockerignore</Link>
-      </Content>
-      <None Update="appsettings*.json">
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      </None>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="dbup-postgresql" />
-      <PackageReference Include="Polly" />
-      <PackageReference Include="Microsoft.Extensions.Hosting" />
-      <PackageReference Include="Microsoft.Extensions.Configuration" />
+        <Content Include="..\..\.dockerignore">
+          <Link>.dockerignore</Link>
+        </Content>
+        <None Update="appsettings*.json">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        </None>
     </ItemGroup>
 
     <ItemGroup>
-      <EmbeddedResource Include="Scripts/**/*.sql" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Tools">
+            <PrivateAssets>all</PrivateAssets>
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+        <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+        <PackageReference Include="Pgvector.EntityFrameworkCore" />
+        <PackageReference Include="Polly" />
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\eShop.ServiceDefaults\eShop.ServiceDefaults.csproj" />
+        <ProjectReference Include="..\Catalog.API\Catalog.API.csproj" />
+        <ProjectReference Include="..\Identity.API\Identity.API.csproj" />
+        <ProjectReference Include="..\Ordering.Domain\Ordering.Domain.csproj" />
+        <ProjectReference Include="..\Ordering.Infrastructure\Ordering.Infrastructure.csproj" />
+        <ProjectReference Include="..\Webhooks.API\Webhooks.API.csproj" />
+        <ProjectReference Include="..\eShop.ServiceDefaults\eShop.ServiceDefaults.csproj" />
     </ItemGroup>
 </Project>

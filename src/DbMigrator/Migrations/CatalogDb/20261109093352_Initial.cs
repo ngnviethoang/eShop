@@ -5,7 +5,7 @@ using Pgvector;
 
 #nullable disable
 
-namespace Catalog.API.Infrastructure.Migrations
+namespace DbMigrator.Migrations.CatalogDb
 {
     /// <inheritdoc />
     public partial class Initial : Migration

@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace Ordering.Infrastructure.Migrations
+namespace DbMigrator.Migrations.OrderingDb
 {
     /// <inheritdoc />
     public partial class Initial : Migration

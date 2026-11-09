@@ -1,44 +1,82 @@
 # eShop DbMigrator
 
-Standalone database migration runner for eShop using **DbUp** (`dbup-postgresql`).
+Standalone database migration runner for eShop using **Entity Framework Core (EF Core)**.
+
+All migrations for all services are centralized in `DbMigrator` under `Migrations/<DatabaseDb>/`.
 
 ---
 
-## How It Works
+## Architecture & How It Works
 
-1. **Auto Discovery:** Dynamically reads all target databases from `ConnectionStrings` in `appsettings.json`.
-2. **Resilience:** Uses Polly (`WaitAndRetry`: 5s, 10s, 20s) to handle database cold-starts and connection delays.
-3. **Execution:** Discovers and applies embedded SQL scripts from `Scripts/<DatabaseDB>/` in alphabetical order.
-4. **Transaction Safety:** Executes each script in its own transaction (`.WithTransactionPerScript()`).
-5. **Tracking:** Records completed migrations in PostgreSQL's `schemaversions` table.
+1. **Centralized Migrations:** All EF Core migration files are located directly inside `DbMigrator/Migrations/`:
+   - `Migrations/CatalogDb/` (`CatalogContext`)
+   - `Migrations/IdentityDb/` (`ApplicationDbContext`)
+   - `Migrations/OrderingDb/` (`OrderingContext`)
+   - `Migrations/WebhooksDb/` (`WebhooksContext`)
+2. **Project References:** `DbMigrator` references each domain / API project (`Catalog.API`, `Identity.API`, `Ordering.Infrastructure`, `Webhooks.API`) to compile and apply migrations against their DbContext models.
+3. **Execution Modes:**
+   - **Console Runner (Programmatic):** Calling `dotnet run` (or running in Docker / Aspire) runs `DbMigrator.Program`, which iterates through each DbContext and executes `await context.Database.MigrateAsync()` with Polly resilience retry (`5s`, `10s`, `20s`).
+   - **EF Core CLI (`dotnet ef database update`):** Directly apply migrations from the command line using the EF Core CLI tools.
+4. **Tracking:** Completed migrations are tracked natively in PostgreSQL's standard `__EFMigrationsHistory` table.
 
 ---
 
 ## Developer Workflow
 
 ### 1. Add Migration
-Create the EF Core migration from the repo root:
-```powershell
-dotnet ef migrations add <Name> `
-  --project <Project.csproj> --startup-project <Startup.csproj> `
-  --context <DbContext> --output-dir <OutputDir>
-```
+Run from the repository root:
 
-### 2. Export SQL to DbMigrator
-Export SQL with `--idempotent` and `--no-transactions` (DbUp manages the transaction):
 ```powershell
-dotnet ef migrations script <From> <To> `
-  --project <Project.csproj> --startup-project <Startup.csproj> `
+dotnet ef migrations add <MigrationName> `
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
   --context <DbContext> `
-  --output src/DbMigrator/Scripts/<DatabaseDB>/<MigrationName>.sql `
-  --idempotent --no-transactions
+  --output-dir Migrations/<TargetDb>
 ```
-*(Check [`script.txt`](./script.txt) for ready-to-use commands for CatalogDB, IdentityDB, OrderingDB, and WebhooksDB).*
 
-### 3. Apply Migrations
+*Example for CatalogDb:*
+```powershell
+dotnet ef migrations add AddNewProductField `
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
+  --context CatalogContext `
+  --output-dir Migrations/CatalogDb
+```
+
+*(See [`script.txt`](./script.txt) for ready-to-use commands for CatalogDb, IdentityDb, OrderingDb, and WebhooksDb).*
+
+### 2. Apply Migrations (EF Core Update)
+
+#### Option A: Using EF Core CLI (`database update`)
+```powershell
+dotnet ef database update `
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
+  --context <DbContext>
+```
+
+#### Option B: Run DbMigrator Console App
+Applies pending migrations to all 4 databases with retry resilience:
 ```powershell
 cd src/DbMigrator
 dotnet run --no-launch-profile
+```
+
+### 3. List Migrations
+Check applied and pending migrations:
+```powershell
+dotnet ef migrations list `
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
+  --context <DbContext>
+```
+
+### 4. Remove Last Migration (Before applying)
+```powershell
+dotnet ef migrations remove `
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
+  --context <DbContext>
 ```
 
 ---
@@ -56,4 +94,4 @@ docker run --rm `
 ```
 
 > [!NOTE]
-> PostgreSQL requires the `pgvector` extension enabled for `CatalogDB` (e.g. `pgvector/pgvector:pg16-trixie`).
+> PostgreSQL requires the `pgvector` extension enabled for `CatalogDB` (e.g. `ankane/pgvector` or `pgvector/pgvector:pg16-trixie`).

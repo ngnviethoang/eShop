@@ -1,76 +1,37 @@
-# CREATE NEW MIGRATION (replace <Name>). Run from repo root, PowerShell.
-# CatalogDB
+# ==============================================================================
+# EF CORE MIGRATIONS SCRIPTS FOR eShop DbMigrator
+# Run commands from repo root in PowerShell.
+# All migrations are centralized in src/DbMigrator/Migrations/<TargetDb>
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. ADD NEW MIGRATION (Replace <Name> with your migration name)
+# ------------------------------------------------------------------------------
+
+# CatalogDb
 dotnet ef migrations add <Name> `
-  --project src/Catalog.API/Catalog.API.csproj `
-  --startup-project src/Catalog.API/Catalog.API.csproj `
-  --context eShop.Catalog.API.Infrastructure.CatalogContext `
-  --output-dir Infrastructure/Migrations `
-  --configuration Debug
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
+  --context CatalogContext `
+  --output-dir Migrations/CatalogDb
 
-# IdentityDB
+# IdentityDb
 dotnet ef migrations add <Name> `
-  --project src/Identity.API/Identity.API.csproj `
-  --startup-project src/Identity.API/Identity.API.csproj `
-  --context eShop.Identity.API.Data.ApplicationDbContext `
-  --output-dir Data/Migrations `
-  --configuration Debug
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
+  --context ApplicationDbContext `
+  --output-dir Migrations/IdentityDb
 
-# OrderingDB
+# OrderingDb
 dotnet ef migrations add <Name> `
-  --project src/Ordering.Infrastructure/Ordering.Infrastructure.csproj `
-  --startup-project src/Ordering.API/Ordering.API.csproj `
-  --context eShop.Ordering.Infrastructure.OrderingContext `
-  --output-dir Migrations `
-  --configuration Debug
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
+  --context OrderingContext `
+  --output-dir Migrations/OrderingDb
 
-# WebhooksDB
+# WebhooksDb
 dotnet ef migrations add <Name> `
-  --project src/Webhooks.API/Webhooks.API.csproj `
-  --startup-project src/Webhooks.API/Webhooks.API.csproj `
-  --context Webhooks.API.Infrastructure.WebhooksContext `
-  --output-dir Migrations `
-  --configuration Debug
-
-
-# GENERATE SQL (<Last> = latest migration id, see "migrations list"; use <Previous> <Last> to script only a new migration)
-# CatalogDB
-dotnet ef migrations script 0 <Last> `
-  --project src/Catalog.API/Catalog.API.csproj `
-  --startup-project src/Catalog.API/Catalog.API.csproj `
-  --context eShop.Catalog.API.Infrastructure.CatalogContext `
-  --configuration Debug `
-  --output src/DbMigrator/Scripts/CatalogDB/<Last>.sql `
-  --idempotent
-
-# IdentityDB
-dotnet ef migrations script 0 <Last> `
-  --project src/Identity.API/Identity.API.csproj `
-  --startup-project src/Identity.API/Identity.API.csproj `
-  --context eShop.Identity.API.Data.ApplicationDbContext `
-  --configuration Debug `
-  --output src/DbMigrator/Scripts/IdentityDB/<Last>.sql `
-  --idempotent
-
-# OrderingDB (migrations live in Ordering.Infrastructure, startup project is Ordering.API)
-dotnet ef migrations script 0 <Last> `
-  --project src/Ordering.Infrastructure/Ordering.Infrastructure.csproj `
-  --startup-project src/Ordering.API/Ordering.API.csproj `
-  --context eShop.Ordering.Infrastructure.OrderingContext `
-  --configuration Debug `
-  --output src/DbMigrator/Scripts/OrderingDB/<Last>.sql `
-  --idempotent
-
-# WebhooksDB
-dotnet ef migrations script 0 <Last> `
-  --project src/Webhooks.API/Webhooks.API.csproj `
-  --startup-project src/Webhooks.API/Webhooks.API.csproj `
-  --context Webhooks.API.Infrastructure.WebhooksContext `
-  --configuration Debug `
-  --output src/DbMigrator/Scripts/WebhooksDB/<Last>.sql `
-  --idempotent
-
-# LIST MIGRATIONS (example: CatalogDB)
-dotnet ef migrations list `
-  --project src/Catalog.API/Catalog.API.csproj `
-  --startup-project src/Catalog.API/Catalog.API.csproj `
-  --context eShop.Catalog.API.Infrastructure.CatalogContext
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
+  --context WebhooksContext `
+  --output-dir Migrations/WebhooksDb

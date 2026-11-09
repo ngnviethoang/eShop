@@ -4,7 +4,10 @@ builder.AddServiceDefaults();
 
 builder.Services.AddControllersWithViews();
 
-builder.AddNpgsqlDbContext<ApplicationDbContext>("identitydb");
+builder.AddNpgsqlDbContext<ApplicationDbContext>("identitydb", configureDbContextOptions: options =>
+{
+    options.UseNpgsql(npgsql => npgsql.MigrationsAssembly("DbMigrator"));
+});
 
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>()
         .AddEntityFrameworkStores<ApplicationDbContext>()

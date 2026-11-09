@@ -2,21 +2,18 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using eShop.Ordering.Infrastructure;
 
 #nullable disable
 
-namespace Ordering.Infrastructure.Migrations
+namespace DbMigrator.Migrations.OrderingDb
 {
     [DbContext(typeof(OrderingContext))]
-    [Migration("20261107074958_Initial")]
-    partial class Initial
+    partial class OrderingContextModelSnapshot : ModelSnapshot
     {
-        /// <inheritdoc />
-        protected override void BuildTargetModel(ModelBuilder modelBuilder)
+        protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

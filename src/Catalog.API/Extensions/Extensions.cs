@@ -17,6 +17,7 @@ public static class Extensions
             dbContextOptionsBuilder.UseNpgsql(builder =>
             {
                 builder.UseVector();
+                builder.MigrationsAssembly("DbMigrator");
             });
         });
 

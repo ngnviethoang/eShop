@@ -2,21 +2,18 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Webhooks.API.Infrastructure;
 
 #nullable disable
 
-namespace Webhooks.API.Migrations
+namespace DbMigrator.Migrations.WebhooksDb
 {
     [DbContext(typeof(WebhooksContext))]
-    [Migration("20261107075049_Initial")]
-    partial class Initial
+    partial class WebhooksContextModelSnapshot : ModelSnapshot
     {
-        /// <inheritdoc />
-        protected override void BuildTargetModel(ModelBuilder modelBuilder)
+        protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

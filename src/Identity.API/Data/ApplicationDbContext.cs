@@ -1,4 +1,4 @@
-﻿namespace eShop.Identity.API.Data;
+namespace eShop.Identity.API.Data;
 
 /// <remarks>
 /// Add migrations using the following command inside the 'Identity.API' project directory:

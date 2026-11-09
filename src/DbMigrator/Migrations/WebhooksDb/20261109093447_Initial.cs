@@ -4,7 +4,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
 #nullable disable
 
-namespace Webhooks.API.Migrations
+namespace DbMigrator.Migrations.WebhooksDb
 {
     /// <inheritdoc />
     public partial class Initial : Migration
