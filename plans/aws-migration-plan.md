@@ -13,9 +13,9 @@ This plan defines the end-to-end refactoring, optimization, and migration strate
    * **Outer Edge (`https://api.<domain>`):** **Amazon API Gateway (HTTP API v2)** provides serverless edge throttling, WAF protection, and native JWT pre-validation before traffic enters the VPC via **AWS VPC Link**.
    * **Inner BFF / Gateway (`src/eShop.ApiGateway`):** A dedicated **.NET 10 YARP Reverse Proxy** service running on ECS Fargate (and in local Aspire) handles path/version transforms, Redis-backed Output Caching, fine-grained Rate Limiting, and native HTTP/2 gRPC routing to `Basket.API`.
    * **Storefront & Identity Ingress (`https://shop.<domain>`, `https://id.<domain>`):** Routed via **Amazon CloudFront $\rightarrow$ AWS Application Load Balancer (ALB)** to support persistent Blazor Interactive Server WebSockets (`/_blazor`) with sticky sessions and OIDC browser flows.
-3. **Database Migration Strategy (EF Core Model Tracking + Unified DbUp Runner):**
-   * **No Runtime `MigrateAsync()` or `ef database update` & Zero Runtime Data Seeding:** Application containers never execute DDL migrations or data seeders at startup. All runtime seeders and hosted services (`CatalogContextSeed`, `UsersSeed`, `OrderingContextSeed`, `MigrateDbContextExtensions`) are completely eliminated from API projects. EF Core `DbContext` and `*ModelSnapshot.cs` are strictly used for **Entity Model Tracking** and CI schema-diff validation (`HasPendingModelChanges()`).
-   * **Unified `src/DbMigrator` (DbUp):** A single console project powered by `dbup-postgresql` manages ordered, versioned `.sql` scripts for all 4 databases (`CatalogDB`, `OrderingDB`, `IdentityDB`, `WebhooksDB`), including any essential static reference data (e.g., `CardTypes`). It runs both locally in `.NET Aspire` (via `.WaitForCompletion()`) and in AWS CI/CD as a single one-off ECS Fargate task (`aws ecs run-task`) before rolling out application services.
+3. **Database Migration Strategy (Centralized EF Core Migrations in `DbMigrator`):**
+   * **No Runtime `MigrateAsync()` or Seeding inside API Containers:** Application containers (`Catalog.API`, `Ordering.API`, `Identity.API`, `Webhooks.API`) never execute DDL migrations or data seeders at startup. All runtime seeders and startup migration extensions (`CatalogContextSeed`, `UsersSeed`, `OrderingContextSeed`, `MigrateDbContextExtensions`) have been eliminated from API projects.
+   * **Unified `src/DbMigrator` (EF Core):** A single console project (`src/DbMigrator`) centralizes all EF Core migrations and `*ModelSnapshot.cs` files for all 4 databases (`CatalogDB`, `IdentityDB`, `OrderingDB`, `WebhooksDB`) under `src/DbMigrator/Migrations/`, while each API service configures `MigrationsAssembly("DbMigrator")`. Initial/reference data is managed via immutable PostgreSQL SQL `SeedData` migrations (`migrationBuilder.Sql(...)` with `ON CONFLICT DO NOTHING` and sequence `setval`). It applies migrations via `context.Database.MigrateAsync()` (or `dotnet ef database update`), running locally in `.NET Aspire` (`db-migrator`) and in AWS CI/CD as a single one-off ECS Fargate task (`aws ecs run-task`) before rolling out application services.
 
 ---
 
@@ -29,7 +29,7 @@ This plan defines the end-to-end refactoring, optimization, and migration strate
 | **Web & OIDC Ingress** | Kestrel HTTPS | **Amazon CloudFront** + **AWS ALB** (ACM TLS + WAF) |
 | **Static Product Images** | Local disk (`Pics/*.webp`) via YARP forwarder | **Amazon S3** + **Amazon CloudFront (OAC)** |
 | **Relational Database** | Local `ankane/pgvector` container | **Amazon RDS for PostgreSQL 16+** (Single Multi-AZ instance, 4 DBs, `pgvector` HNSW) |
-| **Database Migrations** | `DbMigrator` (DbUp) via Aspire `.WaitForCompletion()` | **Unified `DbMigrator` (DbUp)** One-off ECS Fargate Task in CI/CD |
+| **Database Migrations** | `DbMigrator` (EF Core `MigrateAsync()` / `dotnet ef database update`) via Aspire | **Unified `DbMigrator` (EF Core)** One-off ECS Fargate Task in CI/CD |
 | **Distributed Cache & Keys** | Local Redis container | **Amazon ElastiCache for Redis** (Basket, DataProtection, OutputCache) |
 | **Message Broker** | Local RabbitMQ container | **Amazon MQ for RabbitMQ** (with DLX / Dead-Letter Queues) |
 | **Internal Service Discovery** | Aspire Endpoint Discovery (`https+http://...`) | **AWS ECS Service Connect** (`*.eshop.local:8080`) |
@@ -61,7 +61,7 @@ flowchart TD
         YarpGW -->|"HTTP/1.1"| Ordering["Ordering.API"]
         YarpGW -->|"HTTP/1.1"| Webhooks["Webhooks.API"]
 
-        Migrator["DbMigrator<br/>(One-off DbUp ECS Task)"] --> RDS[("Amazon RDS PostgreSQL<br/>(CatalogDB, OrderingDB, IdentityDB, WebhooksDB)")]
+        Migrator["DbMigrator<br/>(One-off EF Core ECS Task)"] --> RDS[("Amazon RDS PostgreSQL<br/>(CatalogDB, OrderingDB, IdentityDB, WebhooksDB)")]
         Catalog & Ordering & Identity & Webhooks & OrderProc["OrderProcessor"] --> RDS
         Basket & WebApp & Identity & YarpGW --> Redis[("Amazon ElastiCache Redis<br/>(Basket + DataProtection + Cache)")]
         Catalog & Basket & Ordering & Webhooks & WebApp & OrderProc & PayProc["PaymentProcessor"] <--> MQ[["Amazon MQ (RabbitMQ)<br/>+ Dead-Letter Queues"]]
@@ -72,66 +72,67 @@ flowchart TD
 
 ## 2. Migration & Optimization Tasks Breakdown
 
-### Phase 1: Database Migration Architecture (EF Core Model Tracking + DbUp) & Packaging
+### Phase 1: Centralized EF Core Migrations (`DbMigrator`) & Packaging
 
 ---
 
-### Task 1: Disable EF Core Runtime Auto-Migration (`MigrateAsync`) & Eliminate Runtime Data Seeding
+### Task 1: Disable EF Core Runtime Auto-Migration (`MigrateAsync`) & Eliminate Runtime Data Seeding in APIs
 
-* **Issue:** Currently, `Catalog.API`, `Ordering.API`, `Identity.API`, and `Webhooks.API` invoke `builder.Services.AddMigration<TContext>()` in `src/Shared/MigrateDbContextExtensions.cs` (line 65), which runs `await context.Database.MigrateAsync()` and data seeders automatically inside every API container on startup. Additionally, `UsersSeed.cs` unconditionally seeds demo accounts (`alice`, `bob`) with hardcoded passwords (`Pass123$`).
+* **Issue:** Previously, `Catalog.API`, `Ordering.API`, `Identity.API`, and `Webhooks.API` invoked `builder.Services.AddMigration<TContext>()` in `src/Shared/MigrateDbContextExtensions.cs`, running `await context.Database.MigrateAsync()` and runtime data seeders (`CatalogContextSeed.cs`, `OrderingContextSeed.cs`, `UsersSeed.cs`) inside every API container on startup. Additionally, `UsersSeed.cs` unconditionally seeded demo accounts (`alice`, `bob`) with hardcoded password (`Pass123$`).
 * **Impact:**
   1. Application containers require elevated DDL permissions (`CREATE`, `ALTER`, `DROP`) on production RDS databases, violating the principle of least privilege.
   2. Scaling out multiple ECS tasks simultaneously triggers concurrent migration race conditions and table locks.
-  3. Demo credentials (`alice` / `Pass123$`) are created in the production Identity database, creating a severe security vulnerability.
-* **Suggest Fix:**
-  1. Remove `await context.Database.MigrateAsync()` and eliminate all runtime database seeding logic from the API microservices (`CatalogContextSeed.cs`, `UsersSeed.cs`, `OrderingContextSeed.cs`, and `MigrateDbContextExtensions.cs`).
-  2. Retain EF Core `DbContext` configurations and `*ModelSnapshot.cs` files strictly for **EF Model Tracking** and compile-time/CI diff validation (never run `dotnet ef database update` against databases).
-  3. All initial reference data (such as `CardTypes` or master lookup data) is managed via immutable SQL scripts in `DbMigrator` (DbUp). Application containers have zero seeding responsibility and start up instantly.
+  3. Demo credentials (`alice` / `Pass123$`) must not be deployed blindly into a production Identity database.
+* **Status & Implemented Fix:**
+  1. **[Done]** Removed `MigrateDbContextExtensions.cs`, `CatalogContextSeed.cs`, `OrderingContextSeed.cs`, `UsersSeed.cs`, and all startup auto-migration/seeding calls from API microservices.
+  2. **[Done]** Retained EF Core `DbContext` entity configurations in API/Infrastructure projects and moved all migrations and `*ModelSnapshot.cs` files into `src/DbMigrator/Migrations/`.
+  3. **[Done / Production Guard Needed]** Converted deleted runtime seeders into immutable PostgreSQL raw-SQL `SeedData` EF Core migrations (`migrationBuilder.Sql(...)` with `ON CONFLICT DO NOTHING` and identity `setval`) inside `DbMigrator`:
+     * `Migrations/CatalogDb/*_SeedData.cs` (13 brands, 8 types, 101 catalog items)
+     * `Migrations/OrderingDb/*_SeedData.cs` (`ordering.cardtypes`: Amex, Visa, MasterCard)
+     * `Migrations/IdentityDb/*_SeedData.cs` (`alice` and `bob` demo accounts — **must be gated or replaced with non-demo bootstrap users before Production**)
 
 ---
 
-### Task 2: Build Unified `src/DbMigrator` Console Runner using DbUp (`dbup-postgresql`)
+### Task 2: Build Unified `src/DbMigrator` Console Runner using EF Core
 
-* **Issue:** Replacing EF runtime migrations with standalone migrators per service would require maintaining 4 separate projects, 4 Dockerfiles, 4 ECR repositories, and 4 ECS Task Definitions. Currently, there is no SQL-based migration runner in the solution.
+* **Issue:** Replacing API-startup migrations with standalone migrators per service would require maintaining 4 separate projects, 4 Dockerfiles, 4 ECR repositories, and 4 ECS Task Definitions.
 * **Impact:** High operational and CI/CD maintenance overhead, slower deployment pipelines, and risk of drift between local development database setup and AWS production migrations.
-* **Suggest Fix & Implementation Details:**
-  1. Create a single consolidated console project `src/DbMigrator` referencing `dbup-postgresql`, `Polly`, and Microsoft Extensions.
-  2. Organize embedded SQL scripts by connection string key under `Scripts/<DatabaseKey>/`:
-     * `Scripts/CatalogDB/` (including `CREATE EXTENSION IF NOT EXISTS vector;` for pgvector)
-     * `Scripts/IdentityDB/`
-     * `Scripts/OrderingDB/`
-     * `Scripts/WebhooksDB/`
-  3. Export SQL scripts using EF Core CLI with `--idempotent --no-transactions` (documented in `src/DbMigrator/script.txt`):
-     * Omitting internal `START TRANSACTION / COMMIT` prevents conflicts with DbUp's `.WithTransactionPerScript()`.
-  4. Configure DbUp runner pipeline:
-     * **Automatic Discovery:** Iterates dynamically over `ConnectionStrings` section in configuration (`builder.Configuration.GetSection("ConnectionStrings").GetChildren()`) without needing CLI flag parsing.
-     * **Transaction Safety:** `.WithTransactionPerScript()` ensures each script is committed or rolled back atomically.
-     * **Disable Variable Replacement:** `.WithVariablesDisabled()` prevents DbUp from incorrectly parsing PostgreSQL dollar-quote syntax (`$EF$`).
-     * **Structured Logging:** Standard `ILoggerFactory.CreateLogger("DbMigrator")` outputting clean progress and error logs.
-     * **Resilience:** Polly `WaitAndRetry` policy (5s, 10s, 20s) wrapping database connection (`EnsureDatabase`) and migration execution to gracefully wait for PostgreSQL container startup.
-  5. Create a multi-stage Alpine `src/DbMigrator/Dockerfile` using `mcr.microsoft.com/dotnet/runtime:10.0-alpine` for AWS ECR and ECS `run-task`.
-  6. Register `DbMigrator` in `src/eShop.AppHost/AppHost.cs` and configure service dependencies with `.WaitForCompletion(dbMigrator)` for local Aspire runs.
+* **Status & Implemented Fix:**
+  1. **[Done]** Created consolidated console project `src/DbMigrator` (`<FrameworkReference Include="Microsoft.AspNetCore.App" />`) referencing `Npgsql.EntityFrameworkCore.PostgreSQL`, `Pgvector.EntityFrameworkCore`, `Microsoft.EntityFrameworkCore.Tools`, `Polly`, and project references to `Catalog.API`, `Identity.API`, `Ordering.Domain`, `Ordering.Infrastructure`, `Webhooks.API`, and `eShop.ServiceDefaults` (removing `dbup-postgresql`).
+  2. **[Done]** Centralized EF Core migrations by target database under `src/DbMigrator/Migrations/`:
+     * `Migrations/CatalogDb/` (`CatalogContext`: `Initial` + `SeedData`, including `vector` extension)
+     * `Migrations/IdentityDb/` (`ApplicationDbContext`: `Initial` + `SeedData`)
+     * `Migrations/OrderingDb/` (`OrderingContext`: `Initial` + `SeedData`)
+     * `Migrations/WebhooksDb/` (`WebhooksContext`: `Initial`)
+  3. **[Done]** Configured `MigrationsAssembly("DbMigrator")` on Npgsql `DbContextOptions` in `Catalog.API/Extensions/Extensions.cs`, `Identity.API/Program.cs`, `Ordering.API/Extensions/Extensions.cs`, and `Webhooks.API/Extensions/Extensions.cs`.
+  4. **[Done]** Implemented `src/DbMigrator/Program.cs`:
+     * Maps `DbContext` types to connection string keys via `dbContextMappings` (`Dictionary<Type, string>`).
+     * Registers all 4 contexts via generic `RegisterDbContext<TContext>()` (requiring configured connection strings and throwing `InvalidOperationException` if missing).
+     * Applies migrations via `await context.Database.MigrateAsync()` wrapped in Polly `WaitAndRetryAsync` (`5s`, `10s`, `20s`), logging each database name.
+     * Supports both `dotnet run` (console/container) and `dotnet ef database update` CLI (documented in `src/DbMigrator/README.md` and `src/DbMigrator/script.txt`).
+  5. **[Done]** Updated multi-stage Alpine `src/DbMigrator/Dockerfile` to `mcr.microsoft.com/dotnet/aspnet:10.0-alpine` (with `icu-libs` and `USER $APP_UID`), copying all referenced project files for layer-cached restore/publish.
+  6. **[Partial]** Registered `db-migrator` (and `postgres-password` parameter) in `src/eShop.AppHost/AppHost.cs` waiting for all 4 databases. **Remaining:** Add `.WaitForCompletion(dbMigrator)` to downstream services (`identityApi`, `catalogApi`, `orderingApi`, `webHooksApi`) and update `order-processor`'s `.WaitFor(orderingApi)` dependency comment (since migrations now live in `DbMigrator`).
 
 ---
 
-### Task 3: Add CI Guardrail Test for EF Core Model Tracking vs. DbUp SQL Scripts
+### Task 3: Add CI Guardrail Test for EF Core Model Snapshot Drift (`HasPendingModelChanges`)
 
-* **Issue:** When EF Core `MigrateAsync()` is disabled in favor of DbUp SQL scripts, developers might modify a C# Entity or `IEntityTypeConfiguration` without updating the EF `ModelSnapshot` and adding the corresponding `.sql` migration script to `DbMigrator`.
+* **Issue:** Because EF Core migrations now live in `src/DbMigrator/Migrations/` rather than inside each API assembly, developers might modify a C# Entity or `IEntityTypeConfiguration` without scaffolding a new migration in `DbMigrator`.
 * **Impact:** Silent schema drift between C# entities and PostgreSQL tables, causing runtime `Npgsql.PostgresException` (missing column/table or type mismatch) only after deploying to Production.
 * **Suggest Fix:**
-  1. Establish the developer workflow: when modifying an entity, run `dotnet ef migrations add <ChangeName>` to update `*ModelSnapshot.cs`, generate the SQL diff via `dotnet ef migrations script <Prev> <Current>`, and place the reviewed SQL into `src/DbMigrator/Scripts/<DatabaseKey>/` (using commands documented in `src/DbMigrator/script.txt`).
-  2. Add an automated unit test in CI that instantiates `CatalogContext`, `OrderingContext`, `ApplicationDbContext`, and `WebhooksContext` and asserts `context.Database.HasPendingModelChanges() == false`.
+  1. Enforce the developer workflow (documented in `src/DbMigrator/script.txt` and `src/DbMigrator/README.md`): whenever modifying an entity, run `dotnet ef migrations add <ChangeName> --project src/DbMigrator/DbMigrator.csproj --startup-project src/DbMigrator/DbMigrator.csproj --context <DbContext> --output-dir Migrations/<TargetDb>` and verify/apply with `dotnet ef database update`.
+  2. Add an automated unit test (or CI step using `dotnet ef migrations has-pending-model-changes --no-build`) asserting `context.Database.HasPendingModelChanges() == false` for `CatalogContext`, `OrderingContext`, `ApplicationDbContext`, and `WebhooksContext`.
 
 ---
 
 ### Task 4: Optimize Multi-Stage Alpine Dockerfiles & Clean Up Workspace Artifacts
 
-* **Issue:** Empty leftover directories (`src/Catalog.DbMigrator`, `src/Catalog.Infrastructure`, `deploy/docker`) exist in the repository, and container builds need to target `linux/arm64` for AWS Fargate Graviton efficiency.
-* **Impact:** Repository confusion and ~20% higher AWS Fargate compute costs if running `linux/amd64` instead of `linux/arm64` Graviton2/3.
-* **Suggest Fix:**
-  1. Delete unused empty folders (`src/Catalog.DbMigrator`, `src/Catalog.Infrastructure`).
-  2. Keep the multi-stage Alpine Dockerfiles (`mcr.microsoft.com/dotnet/aspnet:10.0-alpine` with `icu-libs` and non-root `USER $APP_UID`) for all services plus the new `src/eShop.ApiGateway/Dockerfile` and `src/DbMigrator/Dockerfile`.
-  3. Configure Docker buildx in CI/CD to build `linux/arm64` (or multi-arch) images for AWS Fargate Graviton.
+* **Issue:** Container builds need to target `linux/arm64` for AWS Fargate Graviton efficiency, an unused empty `deployments/` folder remains in the repository, and `src/eShop.ApiGateway/Dockerfile` needs to be created once `eShop.ApiGateway` is added.
+* **Impact:** Repository clutter and ~20% higher AWS Fargate compute costs if running `linux/amd64` instead of `linux/arm64` Graviton2/3.
+* **Status & Suggest Fix:**
+  1. **[Done]** Legacy empty directories (`src/Catalog.DbMigrator`, `src/Catalog.Infrastructure`, `deploy/docker`) are already absent; remove the remaining empty `deployments/` folder if unused.
+  2. **[Done]** Multi-stage Alpine Dockerfiles (`mcr.microsoft.com/dotnet/aspnet:10.0-alpine` with `icu-libs` and non-root `USER $APP_UID`) are already present across all 10 existing services (`Basket.API`, `Catalog.API`, `DbMigrator`, `Identity.API`, `Ordering.API`, `OrderProcessor`, `PaymentProcessor`, `WebApp`, `WebhookClient`, `Webhooks.API`).
+  3. **[Pending]** Add `src/eShop.ApiGateway/Dockerfile` (with Task 5) and configure Docker buildx in CI/CD to build `linux/arm64` (or multi-arch) images for AWS Fargate Graviton.
 
 ---
 
@@ -141,7 +142,7 @@ flowchart TD
 
 ### Task 5: Create Internal YARP BFF / Gateway Service (`src/eShop.ApiGateway`)
 
-* **Issue:** In `src/eShop.AppHost/AppHost.cs` (lines 62–64), `mobile-bff` is commented out. `WebApp` calls backend microservices directly (`catalog-api`, `basket-api`, `ordering-api`), and `WebApp/Program.cs` (line 32) embeds `Microsoft.Extensions.ServiceDiscovery.Yarp` solely to forward `/product-images/{id}`.
+* **Issue:** In `src/eShop.AppHost/AppHost.cs` (lines 69–71), `mobile-bff` is commented out. `WebApp` calls backend microservices directly (`catalog-api`, `basket-api`, `ordering-api`), and `WebApp/Program.cs` (line 32) embeds `Microsoft.Extensions.ServiceDiscovery.Yarp` solely to forward `/product-images/{id}`.
 * **Impact:**
   1. No centralized internal gateway for API versioning, request aggregation, rate limiting, or response caching.
   2. Both external clients (via AWS API Gateway) and `WebApp` must know the internal addresses and protocols of every downstream microservice.
@@ -207,7 +208,7 @@ flowchart TD
 
 ### Task 10: Fix Split-Horizon DNS for OIDC / JWT Authentication (`Identity.API` Public Issuer vs. Internal Backchannel)
 
-* **Issue:** Users authenticate via browser against the public `Identity.API` URL (`https://id.<domain>`), so tokens have `iss = https://id.<domain>`. However, internal services (`Basket.API`, `Ordering.API`, `Webhooks.API`, `WebApp`) configured with ECS Service Connect (`Identity__Url = http://identity-api.eshop.local:8080`) set `options.Authority = identityUrl` and `ValidIssuers = [identityUrl]` in `src/eShop.ServiceDefaults/AuthenticationExtensions.cs` (lines 38–47). Furthermore, `options.IssuerUri` in `src/Identity.API/Program.cs` (line 20) is commented out.
+* **Issue:** Users authenticate via browser against the public `Identity.API` URL (`https://id.<domain>`), so tokens have `iss = https://id.<domain>`. However, internal services (`Basket.API`, `Ordering.API`, `Webhooks.API`, `WebApp`) configured with ECS Service Connect (`Identity__Url = http://identity-api.eshop.local:8080`) set `options.Authority = identityUrl` and `ValidIssuers = [identityUrl]` in `src/eShop.ServiceDefaults/AuthenticationExtensions.cs` (lines 38–47). Furthermore, `options.IssuerUri` in `src/Identity.API/Program.cs` (line 18) is commented out.
 * **Impact:** All authenticated API requests fail with `401 Unauthorized` (`IDX10205: Issuer validation failed`) because the JWT `iss` claim (`https://id.<domain>`) does not match the internal Service Connect address (`http://identity-api.eshop.local:8080`).
 * **Suggest Fix:**
   1. In `src/Identity.API/Program.cs`, set `options.IssuerUri = builder.Configuration["Identity:IssuerUri"]` when configured so IdentityServer always stamps the public HTTPS issuer URI regardless of internal/external request host.
@@ -219,7 +220,7 @@ flowchart TD
 ### Task 11: Persist ASP.NET Core Data Protection Keys & IdentityServer Signing Credentials
 
 * **Issue:**
-  1. `src/Identity.API/Program.cs` (lines 29 & 37) sets `options.KeyManagement.Enabled = false` and calls `.AddDeveloperSigningCredential()`, which generates an ephemeral `tempkey.jwk` file inside the container filesystem.
+  1. `src/Identity.API/Program.cs` (lines 27 & 35) sets `options.KeyManagement.Enabled = false` and calls `.AddDeveloperSigningCredential()`, which generates an ephemeral `tempkey.jwk` file inside the container filesystem.
   2. `WebApp`, `Identity.API`, and `WebhookClient` do not configure shared ASP.NET Core Data Protection key storage.
 * **Impact:** Running $\ge 2$ ECS tasks for high availability or deploying a new container revision immediately invalidates all issued JWTs, OIDC session cookies, Antiforgery tokens, and Blazor Server states (`CryptographicException: The key {...} was not found in the key ring`).
 * **Suggest Fix:**
@@ -287,7 +288,7 @@ flowchart TD
 * **Impact:** Configuring Amazon Bedrock (`amazon.titan-embed-text-v2:0`, which supports 256, 512, or 1024 dimensions) without matching dimensions causes runtime vector dimension mismatch exceptions in PostgreSQL; missing vector indexes cause slow sequential scans as catalog size grows.
 * **Suggest Fix:**
   1. Make `EmbeddingDimensions` configurable via `CatalogOptions` (defaulting to `384` to work out-of-the-box with local Ollama `all-minilm`, OpenAI `text-embedding-3-small` with `Dimensions = 384`, or Amazon Bedrock `cohere.embed-english-light-v3`).
-  2. Include an HNSW vector index in `src/DbMigrator/Scripts/CatalogDB/0004_AddHnswVectorIndex.sql`:
+  2. Add an EF Core migration in `src/DbMigrator/Migrations/CatalogDb/` (e.g., `AddHnswVectorIndex` via `CatalogItemEntityTypeConfiguration` or `migrationBuilder.Sql(...)`) to create the HNSW vector index:
      ```sql
      CREATE INDEX IF NOT EXISTS ix_catalog_embedding_hnsw
      ON "Catalog" USING hnsw ("Embedding" vector_cosine_ops);
@@ -305,7 +306,7 @@ flowchart TD
 * **Impact:** Monthly AWS bill increases by 300%+ due to redundant RDS instances and NAT Gateway per-GB data processing charges.
 * **Suggest Fix:**
   1. **VPC & Endpoints:** Provision a 2-AZ VPC (2 Public Subnets, 2 Private Subnets) with a free **VPC Gateway Endpoint for S3** and VPC Interface Endpoints for `ecr.api`, `ecr.dkr`, `logs`, and `secretsmanager`.
-  2. **Consolidated RDS PostgreSQL:** Provision **1 Multi-AZ Amazon RDS for PostgreSQL 16+** instance in private subnets hosting all 4 logical databases (`catalogdb`, `orderingdb`, `identitydb`, `webhooksdb`) with separate least-privilege DB users per service and the `vector` extension enabled.
+  2. **Consolidated RDS PostgreSQL:** Provision **1 Multi-AZ Amazon RDS for PostgreSQL 16+** instance in private subnets hosting all 4 logical databases (`CatalogDB`, `OrderingDB`, `IdentityDB`, `WebhooksDB`) with separate least-privilege DB users per service and the `vector` extension enabled.
   3. **ElastiCache & Amazon MQ:** Provision **Amazon ElastiCache for Redis** (Transit Encryption enabled) and **Amazon MQ for RabbitMQ** in private subnets, storing connection strings in **AWS Secrets Manager**.
 
 ---
@@ -328,7 +329,7 @@ flowchart TD
 * **Impact:** Failed deployments or downtime during schema upgrades.
 * **Suggest Fix:**
   1. **Build & Test Stage:** Run `dotnet test` (including the EF Model Snapshot drift check from `Task 3`), build `linux/arm64` Alpine Docker images, and push to Amazon ECR.
-  2. **Database Migration Gate:** Execute a single one-off ECS Fargate task for `eshop-db-migrator`:
+  2. **Database Migration Gate:** Execute a single one-off ECS Fargate task for `eshop-db-migrator` (which executes EF Core `MigrateAsync()` across all 4 databases):
      ```bash
      aws ecs run-task \
        --cluster eshop-cluster \
@@ -358,11 +359,11 @@ flowchart TD
 
 ## 3. Implementation Tracking Checklist
 
-- [ ] **Phase 1: Database Migration (EF Model Tracking + DbUp) & Packaging**
-  - [x] Task 1: Disable EF Core runtime `MigrateAsync()` & eliminate runtime seeders
-  - [x] Task 2: Build unified `DbMigrator` (DbUp) with SQL scripts for all 4 DBs
+- [ ] **Phase 1: Centralized EF Core Migrations (`DbMigrator`) & Packaging**
+  - [x] Task 1: Disable EF Core runtime `MigrateAsync()` & eliminate runtime seeders from APIs *(note: guard/remove `alice`/`bob` demo seed in `IdentityDb` `SeedData` before Production)*
+  - [x] Task 2: Build unified `src/DbMigrator` with centralized EF Core migrations (`Initial` + SQL `SeedData`), `Dockerfile`, `README.md`/`script.txt`, and `AppHost` registration *(follow-up: wire `.WaitForCompletion(dbMigrator)` on API services in `AppHost.cs`)*
   - [ ] Task 3: Add CI guardrail test (`HasPendingModelChanges() == false`)
-  - [ ] Task 4: Clean up empty folders & finalize multi-stage Alpine Dockerfiles
+  - [ ] Task 4: Remove empty `deployments/` folder, add `src/eShop.ApiGateway/Dockerfile`, and configure `linux/arm64` CI builds *(10 existing service Alpine Dockerfiles already completed)*
 - [ ] **Phase 2: Dual-Layer API Gateway (AWS API Gateway + YARP BFF)**
   - [ ] Task 5: Create `src/eShop.ApiGateway` (YARP + Redis OutputCache + RateLimiter)
   - [ ] Task 6: Enable `Http1AndHttp2` & gRPC JSON Transcoding on `Basket.API`
@@ -377,7 +378,7 @@ flowchart TD
 - [ ] **Phase 4: Security Hardening, Messaging Reliability & AI Vector Optimization**
   - [ ] Task 14: Add `.RequireAuthorization()` to `Catalog.API` write routes & externalize OIDC secrets
   - [ ] Task 15: Add Dead-Letter Queue (DLQ), graceful shutdown, and Outbox retry worker
-  - [ ] Task 16: Make `EmbeddingDimensions` configurable & add HNSW index script
+  - [ ] Task 16: Make `EmbeddingDimensions` configurable & add HNSW index migration in `DbMigrator/Migrations/CatalogDb`
 - [ ] **Phase 5: AWS Infrastructure (IaC), CI/CD & Observability**
   - [ ] Task 17: Provision VPC (with S3/ECR endpoints), consolidated RDS (`pgvector`), ElastiCache, Amazon MQ
   - [ ] Task 18: Configure ECS Fargate Cluster (`ARM64`), Service Connect (`eshop.local`), ALB & API Gateway
