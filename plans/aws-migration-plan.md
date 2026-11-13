@@ -10,9 +10,9 @@ This plan defines the end-to-end refactoring, optimization, and migration strate
    * **Local Development:** Retain **.NET Aspire (`eShop.AppHost`)** (`aspire run` / `dotnet run --project src/eShop.AppHost`) for one-command orchestration, Aspire Dashboard telemetry, and local containers.
    * **Production Deployment:** Package services using multi-stage Alpine Dockerfiles (`linux/arm64` Graviton), push to **Amazon ECR**, and run on **Amazon ECS on AWS Fargate**.
 2. **Dual-Layer API Gateway Architecture (Outer AWS API Gateway + Inner YARP BFF):**
-   * **Outer Edge (`https://api.<domain>`):** **Amazon API Gateway (HTTP API v2)** provides serverless edge throttling, WAF protection, and native JWT pre-validation before traffic enters the VPC via **AWS VPC Link**.
-   * **Inner BFF / Gateway (`src/eShop.ApiGateway`):** A dedicated **.NET 10 YARP Reverse Proxy** service running on ECS Fargate (and in local Aspire) handles path/version transforms, Redis-backed Output Caching, fine-grained Rate Limiting, and native HTTP/2 gRPC routing to `Basket.API`.
-   * **Storefront & Identity Ingress (`https://shop.<domain>`, `https://id.<domain>`):** Routed via **Amazon CloudFront $\rightarrow$ AWS Application Load Balancer (ALB)** to support persistent Blazor Interactive Server WebSockets (`/_blazor`) with sticky sessions and OIDC browser flows.
+   * **Outer Edge (`https://api.<domain>`):** **Amazon API Gateway (HTTP API v2)** provides serverless edge throttling and native JWT pre-validation on protected routes before traffic enters the VPC via **AWS VPC Link $\rightarrow$ Internal ALB**. *(Note: attach AWS WAF via CloudFront in front of API Gateway/ALB, since HTTP API v2 does not attach WAF directly).*
+   * **Inner BFF / Gateway (`src/eShop.Gateway`):** A dedicated **.NET 10 YARP Reverse Proxy** service running on ECS Fargate (and in local Aspire) handles path/version transforms, Valkey/Redis-backed Output Caching, fine-grained Rate Limiting, and native HTTP/2 gRPC routing to `Basket.API`.
+   * **Storefront & Identity Ingress (`https://shop.<domain>`, `https://id.<domain>`):** Routed via **Amazon CloudFront $\rightarrow$ Public AWS ALB** to support persistent Blazor Interactive Server WebSockets (`/_blazor`) with sticky sessions and OIDC browser flows.
 3. **Database Migration Strategy (Centralized EF Core Migrations in `DbMigrator`):**
    * **No Runtime `MigrateAsync()` or Seeding inside API Containers:** Application containers (`Catalog.API`, `Ordering.API`, `Identity.API`, `Webhooks.API`) never execute DDL migrations or data seeders at startup. All runtime seeders and startup migration extensions (`CatalogContextSeed`, `UsersSeed`, `OrderingContextSeed`, `MigrateDbContextExtensions`) have been eliminated from API projects.
    * **Unified `src/DbMigrator` (EF Core):** A single console project (`src/DbMigrator`) centralizes all EF Core migrations and `*ModelSnapshot.cs` files for all 4 databases (`CatalogDB`, `IdentityDB`, `OrderingDB`, `WebhooksDB`) under `src/DbMigrator/Migrations/`, while each API service configures `MigrationsAssembly("DbMigrator")`. Initial/reference data is managed via immutable PostgreSQL SQL `SeedData` migrations (`migrationBuilder.Sql(...)` with `ON CONFLICT DO NOTHING` and sequence `setval`). It applies migrations via `context.Database.MigrateAsync()` (or `dotnet ef database update`), running locally in `.NET Aspire` (`db-migrator`) and in AWS CI/CD as a single one-off ECS Fargate task (`aws ecs run-task`) before rolling out application services.
@@ -24,17 +24,17 @@ This plan defines the end-to-end refactoring, optimization, and migration strate
 | Component | Local Development (.NET Aspire) | Target Production AWS Architecture |
 | :--- | :--- | :--- |
 | **Compute & Orchestration** | Aspire AppHost (`eShop.AppHost`) | **Amazon ECS on AWS Fargate** (`ARM64` Graviton) |
-| **Edge API Gateway** | YARP (`eShop.ApiGateway`) | **Amazon API Gateway (HTTP API v2)** + **VPC Link** |
-| **Internal BFF / Reverse Proxy** | `src/eShop.ApiGateway` (YARP) | **`eShop.ApiGateway` (YARP on ECS)** + Redis Output Cache |
-| **Web & OIDC Ingress** | Kestrel HTTPS | **Amazon CloudFront** + **AWS ALB** (ACM TLS + WAF) |
+| **Edge API Gateway** | YARP (`eShop.Gateway`) | **Amazon API Gateway (HTTP API v2)** + **VPC Link** $\rightarrow$ **Internal ALB** |
+| **Internal BFF / Reverse Proxy** | `src/eShop.Gateway` (YARP) | **`eShop.Gateway` (YARP on ECS)** + Valkey/Redis Output Cache |
+| **Web & OIDC Ingress** | Kestrel HTTPS | **Amazon CloudFront** (WAF + CDN) + **Public AWS ALB** (ACM TLS) |
 | **Static Product Images** | Local disk (`Pics/*.webp`) via YARP forwarder | **Amazon S3** + **Amazon CloudFront (OAC)** |
-| **Relational Database** | Local `ankane/pgvector` container | **Amazon RDS for PostgreSQL 16+** (Single Multi-AZ instance, 4 DBs, `pgvector` HNSW) |
+| **Relational Database** | Local `ankane/pgvector` container | **Amazon RDS for PostgreSQL 16+** (Single Multi-AZ instance, 4 DBs, `rds.force_ssl=1`, `pgvector` HNSW) |
 | **Database Migrations** | `DbMigrator` (EF Core `MigrateAsync()` / `dotnet ef database update`) via Aspire | **Unified `DbMigrator` (EF Core)** One-off ECS Fargate Task in CI/CD |
-| **Distributed Cache & Keys** | Local Redis container | **Amazon ElastiCache for Redis** (Basket, DataProtection, OutputCache) |
-| **Message Broker** | Local RabbitMQ container | **Amazon MQ for RabbitMQ** (with DLX / Dead-Letter Queues) |
+| **Distributed Cache & Keys** | Local Redis container | **Amazon ElastiCache for Valkey** (Replication Group, Cluster Mode Disabled, Multi-AZ, TLS) |
+| **Message Broker** | Local RabbitMQ container | **Amazon MQ for RabbitMQ (`mq.m7g`)** (AMQPS TLS `5671`, with DLX / Dead-Letter Queues) |
 | **Internal Service Discovery** | Aspire Endpoint Discovery (`https+http://...`) | **AWS ECS Service Connect** (`*.eshop.local:8080`) |
 | **Secrets & Signing Keys** | User Secrets / `appsettings.Development.json` | **AWS Secrets Manager** & **SSM Parameter Store** |
-| **Observability** | Aspire Dashboard OTLP | **AWS Distro for OpenTelemetry (ADOT)**, **CloudWatch Logs**, **AWS X-Ray** |
+| **Observability** | Aspire Dashboard OTLP | **ADOT Collector Sidecar / OTLP**, **CloudWatch Logs / Application Signals**, **AWS X-Ray** |
 
 ---
 
@@ -42,8 +42,8 @@ This plan defines the end-to-end refactoring, optimization, and migration strate
 
 ```mermaid
 flowchart TD
-    Browser(["Web Browser"]) --> CF["Amazon CloudFront CDN"]
-    Mobile(["Mobile / External API Clients"]) --> APIGW["Amazon API Gateway (HTTP API v2)<br/>+ Edge JWT Authorizer"]
+    Browser(["Web Browser"]) --> CF["Amazon CloudFront CDN + WAF"]
+    Mobile(["Mobile / External API Clients"]) --> APIGW["Amazon API Gateway (HTTP API v2)<br/>+ Route-Scoped JWT Authorizer"]
 
     CF -->|"/pics/*.webp"| S3[("Amazon S3<br/>(Catalog Pictures)")]
     CF -->|"shop / id / hooks"| ALB["Public AWS ALB<br/>(TLS Termination + Sticky Sessions)"]
@@ -53,7 +53,7 @@ flowchart TD
         ALB -->|"id.domain.com"| Identity["Identity.API<br/>(Duende IdentityServer)"]
         ALB -->|"hooks.domain.com"| WebhookClient["WebhookClient"]
 
-        APIGW -->|"VPC Link"| YarpGW["eShop.ApiGateway<br/>(YARP BFF + RateLimit + OutputCache)"]
+        APIGW -->|"VPC Link"| IntALB["Internal ALB"] --> YarpGW["eShop.Gateway<br/>(YARP BFF + RateLimit + OutputCache)"]
         WebApp -.->|"Internal East-West"| YarpGW
 
         YarpGW -->|"HTTP/1.1"| Catalog["Catalog.API"]
@@ -61,10 +61,10 @@ flowchart TD
         YarpGW -->|"HTTP/1.1"| Ordering["Ordering.API"]
         YarpGW -->|"HTTP/1.1"| Webhooks["Webhooks.API"]
 
-        Migrator["DbMigrator<br/>(One-off EF Core ECS Task)"] --> RDS[("Amazon RDS PostgreSQL<br/>(CatalogDB, OrderingDB, IdentityDB, WebhooksDB)")]
+        Migrator["DbMigrator<br/>(One-off EF Core ECS Task)"] --> RDS[("Amazon RDS PostgreSQL 16+ (SSL)<br/>(CatalogDB, OrderingDB, IdentityDB, WebhooksDB)")]
         Catalog & Ordering & Identity & Webhooks & OrderProc["OrderProcessor"] --> RDS
-        Basket & WebApp & Identity & YarpGW --> Redis[("Amazon ElastiCache Redis<br/>(Basket + DataProtection + Cache)")]
-        Catalog & Basket & Ordering & Webhooks & WebApp & OrderProc & PayProc["PaymentProcessor"] <--> MQ[["Amazon MQ (RabbitMQ)<br/>+ Dead-Letter Queues"]]
+        Basket & WebApp & Identity & YarpGW --> Redis[("Amazon ElastiCache for Valkey<br/>(Basket + DataProtection + OutputCache)")]
+        Catalog & Basket & Ordering & Webhooks & WebApp & OrderProc & PayProc["PaymentProcessor"] <--> MQ[["Amazon MQ RabbitMQ (mq.m7g)<br/>AMQPS :5671 + Dead-Letter Queues"]]
     end
 ```
 
@@ -89,7 +89,7 @@ flowchart TD
   3. **[Done / Production Guard Needed]** Converted deleted runtime seeders into immutable PostgreSQL raw-SQL `SeedData` EF Core migrations (`migrationBuilder.Sql(...)` with `ON CONFLICT DO NOTHING` and identity `setval`) inside `DbMigrator`:
      * `Migrations/CatalogDb/*_SeedData.cs` (13 brands, 8 types, 101 catalog items)
      * `Migrations/OrderingDb/*_SeedData.cs` (`ordering.cardtypes`: Amex, Visa, MasterCard)
-     * `Migrations/IdentityDb/*_SeedData.cs` (`alice` and `bob` demo accounts — **must be gated or replaced with non-demo bootstrap users before Production**)
+     * `Migrations/IdentityDb/*_SeedData.cs` (`alice` and `bob` demo accounts — **must be gated or replaced with non-demo bootstrap users before Production**; note: currently both `alice` and `bob` share the same UUID `'942a6802-0716-4295-957c-f2ccba8c2a06'`, causing `bob` to be skipped by `ON CONFLICT DO NOTHING`)
 
 ---
 
@@ -127,12 +127,12 @@ flowchart TD
 
 ### Task 4: Optimize Multi-Stage Alpine Dockerfiles & Clean Up Workspace Artifacts
 
-* **Issue:** Container builds need to target `linux/arm64` for AWS Fargate Graviton efficiency, an unused empty `deployments/` folder remains in the repository, and `src/eShop.ApiGateway/Dockerfile` needs to be created once `eShop.ApiGateway` is added.
-* **Impact:** Repository clutter and ~20% higher AWS Fargate compute costs if running `linux/amd64` instead of `linux/arm64` Graviton2/3.
+* **Issue:** Container builds need to target `linux/arm64` for AWS Fargate Graviton efficiency, an unused empty `deployments/` folder remains in the repository, and the newly added `src/eShop.Gateway/Dockerfile` uses `mcr.microsoft.com/dotnet/aspnet:10.0` (Debian) and runs `dotnet restore` **before** copying `Directory.Packages.props` (breaking Central Package Management builds).
+* **Impact:** `eShop.Gateway` container builds fail under CPM; ~20% higher AWS Fargate compute costs if running `linux/amd64` instead of `linux/arm64` Graviton2/3.
 * **Status & Suggest Fix:**
-  1. **[Done]** Legacy empty directories (`src/Catalog.DbMigrator`, `src/Catalog.Infrastructure`, `deploy/docker`) are already absent; remove the remaining empty `deployments/` folder if unused.
-  2. **[Done]** Multi-stage Alpine Dockerfiles (`mcr.microsoft.com/dotnet/aspnet:10.0-alpine` with `icu-libs` and non-root `USER $APP_UID`) are already present across all 10 existing services (`Basket.API`, `Catalog.API`, `DbMigrator`, `Identity.API`, `Ordering.API`, `OrderProcessor`, `PaymentProcessor`, `WebApp`, `WebhookClient`, `Webhooks.API`).
-  3. **[Pending]** Add `src/eShop.ApiGateway/Dockerfile` (with Task 5) and configure Docker buildx in CI/CD to build `linux/arm64` (or multi-arch) images for AWS Fargate Graviton.
+  1. **[Done]** Legacy empty directories (`src/Catalog.DbMigrator`, `src/Catalog.Infrastructure`, `deploy/docker`) are already absent; remove any remaining unused empty folders (e.g., `deployments/` if present).
+  2. **[Done]** Multi-stage Alpine Dockerfiles (`mcr.microsoft.com/dotnet/aspnet:10.0-alpine` with `icu-libs` and non-root `USER $APP_UID`) are already present across all 10 original services (`Basket.API`, `Catalog.API`, `DbMigrator`, `Identity.API`, `Ordering.API`, `OrderProcessor`, `PaymentProcessor`, `WebApp`, `WebhookClient`, `Webhooks.API`).
+  3. **[Pending]** Convert `src/eShop.Gateway/Dockerfile` to multi-stage `10.0-alpine` (`icu-libs` + `USER $APP_UID`), copy `Directory.*.props` / `nuget.config` / `eShop.ServiceDefaults.csproj` before `dotnet restore`, and configure Docker `buildx` in CI/CD to build `linux/arm64` images for AWS Fargate Graviton.
 
 ---
 
@@ -140,18 +140,17 @@ flowchart TD
 
 ---
 
-### Task 5: Create Internal YARP BFF / Gateway Service (`src/eShop.ApiGateway`)
+### Task 5: Create & Harden Internal YARP BFF / Gateway Service (`src/eShop.Gateway`)
 
-* **Issue:** In `src/eShop.AppHost/AppHost.cs` (lines 69–71), `mobile-bff` is commented out. `WebApp` calls backend microservices directly (`catalog-api`, `basket-api`, `ordering-api`), and `WebApp/Program.cs` (line 32) embeds `Microsoft.Extensions.ServiceDiscovery.Yarp` solely to forward `/product-images/{id}`.
+* **Issue:** `src/eShop.Gateway` was recently scaffolded (commit `c50d5cf`) with basic YARP routing (`Program.cs`, `appsettings.json` targeting `*.eshop.local:8080`), while `mobile-bff` in `src/eShop.AppHost/AppHost.cs` (lines 69–71) remains commented out and `WebApp/Program.cs` (line 32) still uses `Microsoft.Extensions.ServiceDiscovery.Yarp` solely to forward `/product-images/{id}`.
 * **Impact:**
-  1. No centralized internal gateway for API versioning, request aggregation, rate limiting, or response caching.
-  2. Both external clients (via AWS API Gateway) and `WebApp` must know the internal addresses and protocols of every downstream microservice.
-* **Suggest Fix:**
-  1. Create a standalone `src/eShop.ApiGateway` project using `Yarp.ReverseProxy` and `eShop.ServiceDefaults`.
-  2. Migrate and expand the route configurations from `src/eShop.AppHost/Extensions.cs` (`ConfigureMobileBffRoutes`) into `eShop.ApiGateway/appsettings.json` covering `/api/catalog/{**catch-all}`, `/api/orders/{**catch-all}`, `/api/basket/{**catch-all}`, and `/api/webhooks/{**catch-all}`.
-  3. Add **Redis-backed Output Caching** at `eShop.ApiGateway` for read-heavy catalog routes (`/api/catalog/items`, `/api/catalog/catalogbrands`, `/api/catalog/catalogtypes`, `/api/catalog/items/facets`) with a 15–60s TTL to offload 80%+ of read queries from RDS PostgreSQL.
-  4. Add **ASP.NET Core Rate Limiting** at `eShop.ApiGateway` for expensive endpoints (`/api/catalog/items/withsemanticrelevance` AI search and `POST /api/orders`).
-  5. Register `eShop.ApiGateway` in `AppHost.cs` for local development and create `src/eShop.ApiGateway/Dockerfile` for AWS ECS deployment.
+  1. `src/eShop.Gateway` does not yet reference `eShop.ServiceDefaults` (missing `/health`, `/alive`, OpenTelemetry, and Aspire Service Discovery).
+  2. No centralized output caching or rate limiting protects RDS PostgreSQL and AI search routes.
+* **Status & Suggest Fix:**
+  1. **[Done]** Created `src/eShop.Gateway` (`Yarp.ReverseProxy`) with `appsettings.json` routes for `/api/catalog/{**catch-all}`, `/api/orders/{**catch-all}`, `/api/basket/{**catch-all}`, `/BasketApi.Basket/{**catch-all}` (HTTP/2), and `/api/webhooks/{**catch-all}`.
+  2. **[Pending]** Reference `eShop.ServiceDefaults` in `eShop.Gateway` (`AddServiceDefaults()`, `AddServiceDiscovery()`, `MapDefaultEndpoints()`).
+  3. **[Pending]** Add **ElastiCache Valkey/Redis-backed Output Caching** at `eShop.Gateway` for read-heavy catalog routes (`/api/catalog/items`, `/api/catalog/catalogbrands`, `/api/catalog/catalogtypes`, `/api/catalog/items/facets`) with a 15–60s TTL *(use Cluster-Mode Disabled Replication Group to avoid `CROSSSLOT` errors in Lua tag-eviction scripts)*.
+  4. **[Pending]** Add **ASP.NET Core Rate Limiting** at `eShop.Gateway` for expensive endpoints (`/api/catalog/items/withsemanticrelevance` AI search and `POST /api/orders`), and wire `eShop.Gateway` into `src/eShop.AppHost/AppHost.cs`.
 
 ---
 
@@ -159,23 +158,26 @@ flowchart TD
 
 * **Issue:** `src/Basket.API/appsettings.json` (lines 8–12) forces `"Protocols": "Http2"` on Kestrel, and `Basket.API` only exposes a binary gRPC endpoint (`Basket.proto`).
 * **Impact:**
-  1. **ECS & ALB Health Check Failure:** Standard HTTP/1.1 health probes (`GET /health`, `GET /alive`) against `Basket.API` fail when Kestrel only accepts HTTP/2 cleartext (h2c), causing ECS to kill the `Basket.API` container.
+  1. **ECS & ALB Health Check Failure:** Standard HTTP/1.1 health probes (`GET /health`, `GET /alive`) against `Basket.API` fail when Kestrel only accepts HTTP/2 cleartext (h2c), causing ECS/ALB health checks to kill the `Basket.API` container.
   2. **AWS API Gateway Incompatibility:** Amazon API Gateway (HTTP API v2) at the outer edge does not support binary gRPC passthrough, preventing external/REST clients from accessing the basket service through the edge gateway.
 * **Suggest Fix:**
-  1. Update `src/Basket.API/appsettings.json` to set `"Protocols": "Http1AndHttp2"` (or expose HTTP/1.1 health checks on port `8080` and HTTP/2 gRPC on port `8081`).
+  1. Update `src/Basket.API/appsettings.json` to set `"Protocols": "Http1AndHttp2"` (Kestrel supports both HTTP/1.1 and `h2c` prior-knowledge HTTP/2 on cleartext port `8080`).
   2. Add `Microsoft.AspNetCore.Grpc.JsonTranscoding` to `src/Basket.API/Basket.API.csproj`, annotate `src/Basket.API/Proto/basket.proto` with `google.api.http` bindings (`GET /api/v1/basket`, `POST /api/v1/basket`, `DELETE /api/v1/basket`), and register `.AddGrpc().AddJsonTranscoding()`.
-  3. Keep `WebApp` and internal YARP using high-performance HTTP/2 gRPC while enabling external clients through AWS API Gateway to use REST JSON seamlessly.
+  3. Keep `WebApp` and internal YARP using HTTP/2 gRPC while enabling external REST JSON clients via `/api/basket/...` through API Gateway $\rightarrow$ `eShop.Gateway`.
 
 ---
 
-### Task 7: Provision Amazon API Gateway (HTTP API v2) + VPC Link in Front of `eShop.ApiGateway`
+### Task 7: Provision Amazon API Gateway (HTTP API v2) + VPC Link $\rightarrow$ Internal ALB $\rightarrow$ `eShop.Gateway`
 
-* **Issue:** Exposing backend APIs or the YARP BFF directly to public internet traffic without a managed cloud API gateway lacks AWS-level edge authentication, throttling, and VPC isolation.
-* **Impact:** Unauthenticated or abusive traffic hits ECS Fargate tasks directly, increasing compute costs and attack surface. Conversely, routing `WebApp` (Blazor Server WebSockets) through REST API Gateway breaks SignalR `/_blazor` connections.
+* **Issue:** Exposing backend APIs or `eShop.Gateway` directly to the public internet bypasses AWS edge throttling and JWT validation. Furthermore, **ECS Service Connect (`*.eshop.local`) is an internal East-West Envoy mesh and cannot be targeted directly by an API Gateway VPC Link**, and attaching a JWT Authorizer globally would break public catalog reads (`GET /api/catalog/items`).
+* **Impact:** Unauthenticated traffic hits ECS tasks directly, VPC Link misconfiguration causes `503`/`500` routing failures, and global JWT auth breaks anonymous storefront browsing.
 * **Suggest Fix:**
-  1. Provision **Amazon API Gateway (HTTP API v2)** mapped to `https://api.<domain>` with a **Native JWT Authorizer** configured against `Identity.API` (`https://id.<domain>`).
-  2. Create an **AWS API Gateway VPC Link** routing validated edge requests into the private subnet to `eShop.ApiGateway` (via Internal ALB or AWS Cloud Map / ECS Service Discovery).
-  3. Keep `WebApp` (`https://shop.<domain>`) and `Identity.API` (`https://id.<domain>`) routed via **CloudFront $\rightarrow$ Public ALB** so Blazor Interactive Server WebSockets and OIDC browser redirects work natively, while `WebApp` makes East-West API calls directly to `http://api-gateway.eshop.local:8080` inside the VPC.
+  1. Provision **Amazon API Gateway (HTTP API v2)** mapped to `https://api.<domain>` (fronted by **CloudFront + AWS WAF**, since HTTP API v2 does not attach WAF directly).
+  2. Place an **Internal ALB** (with `/alive` health check) in front of `eShop.Gateway`, and connect **API Gateway VPC Link** to that Internal ALB *(or alternatively register classic ECS Service Discovery `serviceRegistries` in AWS Cloud Map)*.
+  3. **Split Public vs. Protected API Gateway Routes:**
+     * Keep `GET /api/catalog/{proxy+}` **unauthenticated** (no JWT Authorizer) for public catalog browsing & facets.
+     * Attach the **HTTP API v2 JWT Authorizer** (`iss = https://id.<domain>`, matching `aud` / scopes from Duende IdentityServer) to protected routes (`POST/PUT/DELETE /api/catalog/{proxy+}`, `ANY /api/orders/{proxy+}`, `ANY /api/basket/{proxy+}`, `ANY /api/webhooks/{proxy+}`).
+  4. Keep `WebApp` (`https://shop.<domain>`) and `Identity.API` (`https://id.<domain>`) routed via **CloudFront $\rightarrow$ Public ALB** so Blazor Interactive Server WebSockets and OIDC redirects work natively, while `WebApp` calls internal services directly via ECS Service Connect (`*.eshop.local:8080`).
 
 ---
 
@@ -202,7 +204,8 @@ flowchart TD
   2. `Identity.API` advertises `http://` endpoints in `/.well-known/openid-configuration`, breaking OIDC login redirects (`Invalid redirect_uri`) and browser cookie policies (`SameSite` / `Secure`).
 * **Suggest Fix:**
   1. In `src/eShop.ServiceDefaults/Extensions.cs`, register `ForwardedHeadersOptions` with `ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost` and clear `KnownNetworks` and `KnownProxies` (safe because ECS tasks run in private subnets restricted by Security Groups to ALB traffic only).
-  2. Ensure `app.UseForwardedHeaders()` runs at the very beginning of the middleware pipeline in `WebApp`, `Identity.API`, `WebhookClient`, and `eShop.ApiGateway`.
+  2. Ensure `app.UseForwardedHeaders()` runs at the very beginning of the middleware pipeline in `WebApp`, `Identity.API`, `WebhookClient`, and `eShop.Gateway`.
+  3. When terminating TLS at **CloudFront** in front of an HTTP ALB origin, ensure CloudFront passes `X-Forwarded-Proto: https` (via Origin Custom Header) and forwards `Host` / `Origin` / cookies so ASP.NET Core issues `Secure` OIDC cookies properly.
 
 ---
 
@@ -224,8 +227,8 @@ flowchart TD
   2. `WebApp`, `Identity.API`, and `WebhookClient` do not configure shared ASP.NET Core Data Protection key storage.
 * **Impact:** Running $\ge 2$ ECS tasks for high availability or deploying a new container revision immediately invalidates all issued JWTs, OIDC session cookies, Antiforgery tokens, and Blazor Server states (`CryptographicException: The key {...} was not found in the key ring`).
 * **Suggest Fix:**
-  1. Add `Microsoft.AspNetCore.DataProtection.StackExchangeRedis` and configure `.AddDataProtection().SetApplicationName("eShop").PersistKeysToStackExchangeRedis(...)` backed by **Amazon ElastiCache for Redis** in `WebApp`, `Identity.API`, and `WebhookClient`.
-  2. In `Identity.API/Program.cs`, use `.AddDeveloperSigningCredential()` only when `builder.Environment.IsDevelopment()`. In Production, load a persistent X.509 signing certificate from **AWS Secrets Manager** (or enable Duende Key Management persisted in `identitydb`).
+  1. Add `Microsoft.AspNetCore.DataProtection.StackExchangeRedis` and configure `.AddDataProtection().SetApplicationName("eShop").PersistKeysToStackExchangeRedis(...)` backed by **Amazon ElastiCache for Valkey** (or Redis OSS) with TLS (`ssl=true`) and AUTH/RBAC in `WebApp`, `Identity.API`, and `WebhookClient`.
+  2. In `Identity.API/Program.cs`, use `.AddDeveloperSigningCredential()` only when `builder.Environment.IsDevelopment()`. In Production, load a persistent X.509 signing certificate from **AWS Secrets Manager** (or enable Duende Key Management persisted in `identitydb`), and exclude `tempkey.jwk` from production publish outputs.
 
 ---
 
@@ -262,7 +265,7 @@ flowchart TD
   3. `src/Identity.API/Services/RedirectService.cs` extracts `redirect_uri` using brittle `Regex.Split` string manipulation.
 * **Impact:** Unauthenticated callers can modify product prices or delete the entire catalog; attackers can use the hardcoded `"secret"` to impersonate confidential OIDC clients; regex URL parsing risks open-redirect vulnerabilities.
 * **Suggest Fix:**
-  1. Call `builder.AddDefaultAuthentication()` in `Catalog.API` and chain `.RequireAuthorization()` on `POST`, `PUT`, and `DELETE` endpoints in `CatalogApi.cs`.
+  1. Call `builder.AddDefaultAuthentication()` in `Catalog.API`, add the `"Identity"` config section (`Audience: "catalog"`) to `Catalog.API/appsettings.json`, register `"catalog"` as an `ApiScope`/`ApiResource` (and add to client `AllowedScopes`) in `src/Identity.API/Configuration/Config.cs`, and chain `.RequireAuthorization()` on `POST`, `PUT`, and `DELETE` endpoints in `CatalogApi.cs`.
   2. Load OIDC client secrets (`WebAppClientSecret`, `WebhooksClientSecret`, `MauiClientSecret`) from `IConfiguration` backed by **AWS Secrets Manager** (falling back to `"secret"` only in `Development`).
   3. Replace manual regex splitting in `RedirectService.cs` with `Uri.TryCreate` and `QueryHelpers.ParseQuery` (or Duende's `IIdentityServerInteractionService`).
 
@@ -276,7 +279,7 @@ flowchart TD
   3. `IntegrationEventLogEF` marks failed event publishes as `PublishedFailed`, but no background worker ever retries stuck `NotPublished` or `PublishedFailed` records.
 * **Impact:** Transient database timeouts or deadlocks during order/payment processing cause permanent event loss (orders stuck in `Submitted` or `AwaitingValidation` forever); ECS task termination (`SIGTERM`) drops in-flight messages.
 * **Suggest Fix:**
-  1. In `RabbitMQEventBus.cs`, declare a Dead-Letter Exchange (`eshop_event_bus_dlx`) and Dead-Letter Queue (`{_queueName}_dlq`) via queue arguments (`x-dead-letter-exchange`). On handler exception after retry, call `BasicNackAsync(eventArgs.DeliveryTag, multiple: false, requeue: false)` so poison messages are routed to DLQ for inspection and CloudWatch alarming.
+  1. In `RabbitMQEventBus.cs` (which currently declares `ExchangeName = "eshop_event_bus"` as `type: "direct"`), declare a Dead-Letter Exchange (`eshop_event_bus_dlx`) and Dead-Letter Queue (`{_queueName}_dlq`) via queue arguments (`x-dead-letter-exchange`). On handler exception after retry, call `BasicNackAsync(eventArgs.DeliveryTag, multiple: false, requeue: false)` so poison messages are routed to DLQ for inspection and CloudWatch alarming. Ensure connection strings use `amqps://` over port `5671` (Amazon MQ requires TLS).
   2. Implement `StopAsync` in `RabbitMQEventBus.cs` to gracefully close `_consumerChannel` and `_rabbitMQConnection` when ECS sends `SIGTERM`.
   3. Add a background recovery worker (`OutboxRetryBackgroundService`) in `Catalog.API` and `Ordering.API` that polls `IntegrationEventLog` for `NotPublished` / `PublishedFailed` entries older than 30 seconds and republishes them.
 
@@ -305,21 +308,21 @@ flowchart TD
 * **Issue:** Provisioning 4 separate RDS instances or routing all ECR image pulls, S3 accesses, and CloudWatch logs through NAT Gateways creates unnecessary AWS infrastructure costs.
 * **Impact:** Monthly AWS bill increases by 300%+ due to redundant RDS instances and NAT Gateway per-GB data processing charges.
 * **Suggest Fix:**
-  1. **VPC & Endpoints:** Provision a 2-AZ VPC (2 Public Subnets, 2 Private Subnets) with a free **VPC Gateway Endpoint for S3** and VPC Interface Endpoints for `ecr.api`, `ecr.dkr`, `logs`, and `secretsmanager`.
-  2. **Consolidated RDS PostgreSQL:** Provision **1 Multi-AZ Amazon RDS for PostgreSQL 16+** instance in private subnets hosting all 4 logical databases (`CatalogDB`, `OrderingDB`, `IdentityDB`, `WebhooksDB`) with separate least-privilege DB users per service and the `vector` extension enabled.
-  3. **ElastiCache & Amazon MQ:** Provision **Amazon ElastiCache for Redis** (Transit Encryption enabled) and **Amazon MQ for RabbitMQ** in private subnets, storing connection strings in **AWS Secrets Manager**.
+  1. **VPC & Endpoints:** Provision a 2-AZ VPC (2 Public Subnets, 2 Private Subnets) with a free **VPC Gateway Endpoint for S3** and VPC Interface Endpoints for `ecr.api`, `ecr.dkr`, `logs`, and `secretsmanager` *(in production high-volume traffic; note that for low-traffic dev/lab clusters, 1 NAT Gateway can be cheaper than multiple multi-AZ interface endpoints)*.
+  2. **Consolidated RDS PostgreSQL:** Provision **1 Multi-AZ Amazon RDS for PostgreSQL 16+** instance in private subnets (`rds.force_ssl = 1` default $\rightarrow$ require `SSL Mode=Require` in connection strings) hosting all 4 logical databases (`CatalogDB`, `OrderingDB`, `IdentityDB`, `WebhooksDB`). Pre-create the 4 databases and `CREATE EXTENSION IF NOT EXISTS vector;` in `CatalogDB` (or grant `CREATEDB` and `rds_extension` specifically to the `DbMigrator` role), while giving each API service a separate least-privilege DML-only DB user.
+  3. **ElastiCache & Amazon MQ:** Provision **Amazon ElastiCache for Valkey** (Replication Group, **Cluster Mode Disabled**, Multi-AZ with Automatic Failover, Transit Encryption `rediss://` + RBAC AUTH — avoiding `CROSSSLOT` errors in ASP.NET Output Caching) and **Amazon MQ for RabbitMQ (`mq.m7g` family, AMQPS port `5671` only; note `mq.t3.micro` reached EOS Oct 1, 2026)** in private subnets, storing connection strings in **AWS Secrets Manager**.
 
 ---
 
 ### Task 18: Configure ECS Fargate Cluster, Service Connect (`eshop.local`), ALB & API Gateway Routing
 
-* **Issue:** Microservices require reliable East-West service discovery (supporting both HTTP/1.1 REST and HTTP/2 gRPC) while North-South traffic is split between browser apps (`WebApp`, `Identity.API`) and API consumers (`eShop.ApiGateway`).
-* **Impact:** Misconfigured protocols or security groups break internal gRPC calls to `Basket.API` or expose internal microservices to public traffic.
+* **Issue:** Microservices require reliable East-West service discovery (supporting both HTTP/1.1 REST and HTTP/2 gRPC) while North-South traffic is split between browser apps (`WebApp`, `Identity.API`) and API consumers (`eShop.Gateway`). Note also that API Gateway VPC Link cannot target ECS Service Connect directly.
+* **Impact:** Misconfigured protocols, missing Internal ALB / Cloud Map `serviceRegistries`, or missing `curl` in Alpine containers break internal gRPC calls, API Gateway routing, or container health checks.
 * **Suggest Fix:**
   1. Create an **Amazon ECS Cluster** (Fargate `ARM64` capacity provider) with **ECS Service Connect** enabled under namespace `eshop.local`.
-  2. Register internal Service Connect endpoints (`catalog-api.eshop.local:8080`, `basket-api.eshop.local:8080` with `HTTP2`, `ordering-api.eshop.local:8080`, `identity-api.eshop.local:8080`, `webhooks-api.eshop.local:8080`, `api-gateway.eshop.local:8080`).
-  3. Deploy `OrderProcessor` and `PaymentProcessor` as background ECS Services with no ingress ports exposed, monitored via container health checks.
-  4. Configure **1 Public ALB** with Host-based routing (`shop.<domain>` $\rightarrow$ `WebApp` with Sticky Sessions, `id.<domain>` $\rightarrow$ `Identity.API`, `hooks.<domain>` $\rightarrow$ `WebhookClient`) and **Amazon API Gateway (HTTP API)** (`api.<domain>`) connected via **VPC Link** to `eShop.ApiGateway`.
+  2. Register internal Service Connect endpoints with named Task Definition ports (`catalog-api.eshop.local:8080` [`http`], `basket-api.eshop.local:8080` [`grpc` or `http2`], `ordering-api.eshop.local:8080` [`http`], `identity-api.eshop.local:8080` [`http`], `webhooks-api.eshop.local:8080` [`http`], `eshop-gateway.eshop.local:8080` [`http`]).
+  3. Deploy `OrderProcessor` and `PaymentProcessor` as background ECS Services (`WebApplication` listening on `:8080/alive`) with no public ingress; if configuring ECS container `healthCheck`, use `wget` (if present) or install `curl` in their Dockerfiles (Alpine `aspnet:10.0-alpine` omits `curl` by default).
+  4. Configure **1 Public ALB** behind CloudFront with Host-based routing (`shop.<domain>` $\rightarrow$ `WebApp` with Sticky Sessions, `id.<domain>` $\rightarrow$ `Identity.API`, `hooks.<domain>` $\rightarrow$ `WebhookClient`), and place **1 Internal ALB** in front of `eShop.Gateway` targeted by **Amazon API Gateway (HTTP API v2)** (`api.<domain>`) via **VPC Link**.
 
 ---
 
@@ -338,7 +341,7 @@ flowchart TD
        --network-configuration "awsvpcConfiguration={subnets=[...],securityGroups=[...],assignPublicIp=DISABLED}"
      ```
      Wait for task completion (`aws ecs wait tasks-stopped`) and verify exit code `0`. Abort pipeline immediately if non-zero.
-  3. **Rolling Deployment Stage:** Trigger rolling updates for ECS services (`Catalog.API`, `Basket.API`, `Ordering.API`, `Identity.API`, `Webhooks.API`, `eShop.ApiGateway`, `WebApp`, `OrderProcessor`, `PaymentProcessor`).
+  3. **Rolling Deployment Stage:** Trigger rolling updates for ECS services (`Catalog.API`, `Basket.API`, `Ordering.API`, `Identity.API`, `Webhooks.API`, `eShop.Gateway`, `WebApp`, `OrderProcessor`, `PaymentProcessor`).
 
 ---
 
@@ -348,9 +351,9 @@ flowchart TD
 * **Impact:** High CloudWatch Logs and AWS X-Ray ingestion bills under production traffic, and missing SQL query spans when troubleshooting latency.
 * **Suggest Fix:**
   1. In `src/eShop.ServiceDefaults/Extensions.cs`, configure `ParentBasedSampler(new TraceIdRatioBasedSampler(0.1))` (10% trace sampling) when `!builder.Environment.IsDevelopment()`.
-  2. Configure `awslogs` on all ECS Task Definitions with a **14-to-30-day retention policy**.
+  2. Run an **AWS Distro for OpenTelemetry (ADOT) Collector** sidecar (or CloudWatch Agent / OTLP ingestion) in ECS Task Definitions exporting traces to **AWS X-Ray / CloudWatch Application Signals**, and configure `awslogs` on all ECS Task Definitions with a **14-to-30-day retention policy**.
   3. Provision CloudWatch Alarms for:
-     * Public ALB & API Gateway HTTP `5xx` rate > 1%
+     * Public ALB, Internal ALB & API Gateway HTTP `5xx` rate > 1%
      * ECS Service CPU / Memory utilization > 80%
      * RDS PostgreSQL CPU > 80% and FreeableMemory < 20%
      * Amazon MQ Dead-Letter Queue (`*_dlq`) message count > 0
@@ -360,27 +363,27 @@ flowchart TD
 ## 3. Implementation Tracking Checklist
 
 - [ ] **Phase 1: Centralized EF Core Migrations (`DbMigrator`) & Packaging**
-  - [x] Task 1: Disable EF Core runtime `MigrateAsync()` & eliminate runtime seeders from APIs *(note: guard/remove `alice`/`bob` demo seed in `IdentityDb` `SeedData` before Production)*
+  - [x] Task 1: Disable EF Core runtime `MigrateAsync()` & eliminate runtime seeders from APIs *(note: guard/remove `alice`/`bob` demo seed in `IdentityDb` `SeedData` and fix duplicate UUID before Production)*
   - [x] Task 2: Build unified `src/DbMigrator` with centralized EF Core migrations (`Initial` + SQL `SeedData`), `Dockerfile`, `README.md`/`script.txt`, and `AppHost` registration *(follow-up: wire `.WaitForCompletion(dbMigrator)` on API services in `AppHost.cs`)*
   - [ ] Task 3: Add CI guardrail test (`HasPendingModelChanges() == false`)
-  - [ ] Task 4: Remove empty `deployments/` folder, add `src/eShop.ApiGateway/Dockerfile`, and configure `linux/arm64` CI builds *(10 existing service Alpine Dockerfiles already completed)*
+  - [ ] Task 4: Fix `src/eShop.Gateway/Dockerfile` (convert to `10.0-alpine` + copy `Directory.*.props` before restore), clean up empty folders, and configure `linux/arm64` CI builds *(10 original service Alpine Dockerfiles completed)*
 - [ ] **Phase 2: Dual-Layer API Gateway (AWS API Gateway + YARP BFF)**
-  - [ ] Task 5: Create `src/eShop.ApiGateway` (YARP + Redis OutputCache + RateLimiter)
+  - [ ] Task 5: Harden `src/eShop.Gateway` (`eShop.ServiceDefaults`, Valkey/Redis OutputCache, RateLimiter, wire into `AppHost.cs`; initial YARP scaffold committed in `c50d5cf`)
   - [ ] Task 6: Enable `Http1AndHttp2` & gRPC JSON Transcoding on `Basket.API`
-  - [ ] Task 7: Define Amazon API Gateway (HTTP API v2) + VPC Link to `eShop.ApiGateway`
+  - [ ] Task 7: Define Amazon API Gateway (HTTP API v2) + Route-Scoped JWT Auth + VPC Link $\rightarrow$ Internal ALB $\rightarrow$ `eShop.Gateway`
 - [ ] **Phase 3: Critical Application Code Fixes (Production Showstoppers)**
   - [ ] Task 8: Enable `/health` and `/alive` endpoints in Production
-  - [ ] Task 9: Configure `ForwardedHeadersMiddleware` for AWS ALB
+  - [ ] Task 9: Configure `ForwardedHeadersMiddleware` for AWS ALB / CloudFront
   - [ ] Task 10: Fix Split-Horizon DNS (`IssuerUri` vs. internal `Authority`) in `Identity.API` & clients
-  - [ ] Task 11: Persist Data Protection keys to Redis & Identity signing certs to Secrets Manager
+  - [ ] Task 11: Persist Data Protection keys to ElastiCache Valkey/Redis & Identity signing certs to Secrets Manager
   - [ ] Task 12: Fix `WebApp` Blazor Server real-time notifications across multiple ECS tasks
   - [ ] Task 13: Update `ProductImageUrlProvider` in `WebApp` for S3 + CloudFront URLs
 - [ ] **Phase 4: Security Hardening, Messaging Reliability & AI Vector Optimization**
-  - [ ] Task 14: Add `.RequireAuthorization()` to `Catalog.API` write routes & externalize OIDC secrets
+  - [ ] Task 14: Add `.RequireAuthorization()` + `"Identity"` config to `Catalog.API`, register `"catalog"` scope in `Identity.API`, & externalize OIDC secrets
   - [ ] Task 15: Add Dead-Letter Queue (DLQ), graceful shutdown, and Outbox retry worker
   - [ ] Task 16: Make `EmbeddingDimensions` configurable & add HNSW index migration in `DbMigrator/Migrations/CatalogDb`
 - [ ] **Phase 5: AWS Infrastructure (IaC), CI/CD & Observability**
-  - [ ] Task 17: Provision VPC (with S3/ECR endpoints), consolidated RDS (`pgvector`), ElastiCache, Amazon MQ
-  - [ ] Task 18: Configure ECS Fargate Cluster (`ARM64`), Service Connect (`eshop.local`), ALB & API Gateway
+  - [ ] Task 17: Provision VPC (with S3/ECR endpoints), consolidated RDS (`pgvector`, `rds.force_ssl=1`, least-privilege DB roles), ElastiCache Valkey, Amazon MQ (`mq.m7g`, AMQPS `5671`)
+  - [ ] Task 18: Configure ECS Fargate Cluster (`ARM64`), Service Connect (`eshop.local`), CloudFront + Public ALB, Internal ALB & API Gateway
   - [ ] Task 19: Create GitHub Actions CI/CD workflow with `eshop-db-migrator` ECS task gate
-  - [ ] Task 20: Configure Production OTel sampling (10%), CloudWatch Log retention, and DLQ/5xx Alarms
+  - [ ] Task 20: Configure Production OTel sampling (10%), ADOT sidecar, CloudWatch Log retention, and DLQ/5xx Alarms

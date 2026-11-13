@@ -71,7 +71,7 @@ namespace DbMigrator.Migrations.IdentityDb
                         '98052'
                     ),
                     (
-                        '942a6802-0716-4295-957c-f2ccba8c2a06',
+                        '7a0bae32-bf07-44f6-9a4d-23f217bcd5c3',
                         0,
                         'Bob Smith',
                         'XXXXXXXXXXXX1881',
@@ -110,7 +110,7 @@ namespace DbMigrator.Migrations.IdentityDb
                 DELETE FROM "AspNetUsers"
                 WHERE "Id" IN (
                     '942a6802-0716-4295-957c-f2ccba8c2a06',
-                    '942a6802-0716-4295-957c-f2ccba8c2a06'
+                    '7a0bae32-bf07-44f6-9a4d-23f217bcd5c3'
                 );
                 """);
         }
