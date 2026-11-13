@@ -1,0 +1,37 @@
+# ==============================================================================
+# EF CORE MIGRATIONS SCRIPTS FOR eShop DbMigrator
+# Run commands from repo root in PowerShell.
+# All migrations are centralized in src/DbMigrator/Migrations/<TargetDb>
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. ADD NEW MIGRATION (Replace <Name> with your migration name)
+# ------------------------------------------------------------------------------
+
+# CatalogDb
+dotnet ef migrations add <Name> `
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
+  --context CatalogContext `
+  --output-dir Migrations/CatalogDb
+
+# IdentityDb
+dotnet ef migrations add <Name> `
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
+  --context ApplicationDbContext `
+  --output-dir Migrations/IdentityDb
+
+# OrderingDb
+dotnet ef migrations add <Name> `
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
+  --context OrderingContext `
+  --output-dir Migrations/OrderingDb
+
+# WebhooksDb
+dotnet ef migrations add <Name> `
+  --project src/DbMigrator/DbMigrator.csproj `
+  --startup-project src/DbMigrator/DbMigrator.csproj `
+  --context WebhooksContext `
+  --output-dir Migrations/WebhooksDb

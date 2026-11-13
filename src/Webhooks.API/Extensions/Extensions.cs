@@ -1,4 +1,4 @@
-﻿internal static class Extensions
+internal static class Extensions
 {
     public static void AddApplicationServices(this IHostApplicationBuilder builder)
     {
@@ -7,9 +7,11 @@
         builder.AddRabbitMqEventBus("eventbus")
                .AddEventBusSubscriptions();
 
-        builder.AddNpgsqlDbContext<WebhooksContext>("webhooksdb");
+        builder.AddNpgsqlDbContext<WebhooksContext>("webhooksdb", configureDbContextOptions: options =>
+        {
+            options.UseNpgsql(npgsql => npgsql.MigrationsAssembly("DbMigrator"));
+        });
 
-        builder.Services.AddMigration<WebhooksContext>();
 
         builder.Services.AddTransient<IGrantUrlTesterService, GrantUrlTesterService>();
         builder.Services.AddTransient<IWebhooksRetriever, WebhooksRetriever>();

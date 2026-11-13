@@ -1,4 +1,4 @@
-﻿using System.IO.Pipes;
+using System.IO.Pipes;
 using eShop.AppHost;
 
 var builder = DistributedApplication.CreateBuilder(args);
@@ -9,19 +9,26 @@ builder.AddAzureContainerAppEnvironment("aca");
 var redis = builder.AddRedis("redis");
 var rabbitMq = builder.AddRabbitMQ("eventbus")
     .WithLifetime(ContainerLifetime.Persistent);
-var postgres = builder.AddPostgres("postgres")
+var pgPassword = builder.AddParameter("postgres-password", "yourWeak(!)Password", secret: true);
+var postgres = builder.AddPostgres("postgres", password: pgPassword)
     .WithImage("ankane/pgvector")
     .WithImageTag("latest")
     .WithLifetime(ContainerLifetime.Persistent);
 
-var catalogDb = postgres.AddDatabase("catalogdb");
-var identityDb = postgres.AddDatabase("identitydb");
-var orderDb = postgres.AddDatabase("orderingdb");
-var webhooksDb = postgres.AddDatabase("webhooksdb");
+var catalogDb = postgres.AddDatabase("CatalogDb");
+var identityDb = postgres.AddDatabase("IdentityDb");
+var orderDb = postgres.AddDatabase("OrderingDb");
+var webhooksDb = postgres.AddDatabase("WebhooksDb");
 
 var launchProfileName = ShouldUseHttpForEndpoints() ? "http" : "https";
 
 // Services
+builder.AddDotnetProject("db-migrator", "../DbMigrator")
+    .WithReference(catalogDb).WaitFor(catalogDb)
+    .WithReference(identityDb).WaitFor(identityDb)
+    .WithReference(orderDb).WaitFor(orderDb)
+    .WithReference(webhooksDb).WaitFor(webhooksDb);
+
 var identityApi = builder.AddDotnetProject("identity-api", "../Identity.API", o => o.LaunchProfileName = launchProfileName)
     .WithExternalHttpEndpoints()
     .WithReference(identityDb)
@@ -59,9 +66,9 @@ var webHooksApi = builder.AddDotnetProject("webhooks-api", "../Webhooks.API")
     .WithEnvironment("Identity__Url", identityEndpoint);
 
 // Reverse proxies
-builder.AddYarp("mobile-bff")
+/*builder.AddYarp("mobile-bff")
     .WithExternalHttpEndpoints()
-    .ConfigureMobileBffRoutes(catalogApi, orderingApi, identityApi);
+    .ConfigureMobileBffRoutes(catalogApi, orderingApi, identityApi);*/
 
 // Apps
 var webhooksClient = builder.AddDotnetProject("webhooksclient", "../WebhookClient", o => o.LaunchProfileName = launchProfileName)
